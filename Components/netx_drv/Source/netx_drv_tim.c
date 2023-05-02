@@ -5,8 +5,8 @@
  *           functionalities of timer peripheral:
  *            + Initialization and de-initialization functions
  *            + Timer operation functions
- * $Revision: 5388 $
- * $Date: 2019-05-02 09:43:11 +0200 (Do, 02 Mai 2019) $
+ * $Revision: 9333 $
+ * $Date: 2021-09-27 11:58:14 +0200 (Mo, 27 Sep 2021) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -757,6 +757,7 @@ DRV_STATUS_E DRV_TIM_Wait(DRV_TIM_HANDLE_T * const ptTim, uint32_t ulTickCnt)
   }
   if(ptTim->eState != DRV_TIM_STATE_RUNNING)
   {
+    DRV_UNLOCK(ptTim);
     return DRV_ERROR;
   }
   if(ulTickCnt == 0)
@@ -1518,7 +1519,7 @@ __WEAK void DRV_TIM_SYSTIME_COMPARE_Callback(void)
  * \brief  This function handles interrupts requests.
  * \return None
  */
-void SysTick_Handler(void)
+void DRVSysTick_Handler(void)
 {
   s_apTIMIrqCntr[DRV_TIM_IRQ_SYSTICK]++;
   DRV_TIM_ARMSYSTICK_Callback();

@@ -94,18 +94,22 @@ FocCurrentOffset_StateT Foc_GetCurrentOffsetState();
  * \brief   Set requested current vector in dq frame.
  */
 void Foc_SetRequestCurrent(Math_Vector_DQ_T as_ReqCurrent);
-#if (PAR_USE_OPENLOOP == 1)
+
 /*!
  * \brief   Set requested voltage vector in dq frame.
  */
 void Foc_SetRequestVoltage(Math_Vector_DQ_T as_ReqVoltage);
-#endif
+
 
 /**
  * \brief     Get requested voltage vector in dq frame.
  * @return    Requested voltage vector in DQ frame.
  */
 Math_Vector_DQ_T Foc_GetRequestVoltage();
-
+/**
+ * \brief     Get requested FOC state.
+ * @return    FOC state.
+ */
+FocStateMachine_MainStateT Foc_GetFOCState();
 
 #endif /* #ifndef __FOC_H_ */

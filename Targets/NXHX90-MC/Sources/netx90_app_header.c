@@ -89,7 +89,7 @@ HIL_FILE_NAI_HEADER_V3_0_T app_cpu_header_nai __attribute__ ((section (".app_cpu
     .ulHeaderVersion = HIL_VERSION_COMMON_HEADER_3_0,
     .ulHeaderLength = sizeof(app_cpu_header_nai),
     .ulDataSize = 0,
-    .ulDataStartOffset = 0,
+    .ulDataStartOffset = 704,
     .bNumModuleInfos = 0,
     .aulMD5 = {0},
     .ulTagListSize = 0,

@@ -9,15 +9,13 @@
 #include "foc.h"
 #include "pse.h"
 #include "assert.h"
-
-//#define DEMO_USE_POTENTIOMETER
+#include "sens.h"
+#include "calibrate.h"
 
 /*!
  * \brief   Slope of Pot reading vs Speed request
  */
 #define APP_POT_SPEED_SLOPE                 ((float)(PAR_MAX_SPEED_RPM - PAR_MIN_SPEED_RPM) / (float)(PAR_ADC_MAX_DIG - PAR_POT_MIN_SPEED_REQ_DIG))
-
-#define MPWM_FAULT_COUNT (23)
 
 /** FOC_APPL states */
 typedef enum FOC_APPL_STATE_Ttag
@@ -25,66 +23,112 @@ typedef enum FOC_APPL_STATE_Ttag
   FOC_APPL_IDLE, /**< idle mode, no speed request and speed below sync speed */
   FOC_APPL_RUN, /**< Closed loop motor run state */
   FOC_APPL_STOP, /**< Motor stop state, no speed request speed above sync speed */
+  FOC_APPL_CALIBRATE,/**< Hall sensor calibration state*/
+  FOC_APPL_MANUAL,
   FOC_APPL_ERROR, /**< Error state */
 } FOC_APPL_STATE_T;
 
-/*****************************************************************************/
-/*! FOC_APPL Data                                                                */
-/*****************************************************************************/
-typedef struct FOC_APPL_DATA_Ttag
-{
+
+
+
+typedef struct {
   /*!
-   * \brief   Indicates if the motor is running
-   */
-  bool bMotorRunning;
-  /*!
-   * \brief   Application state definition.
-   */
-  FOC_APPL_STATE_T EFOC_APPLState;
-  /*!
-   * \brief   User requested speed in RPM.
-   */
-  int16_t sUsrReqSpeed;
+ * \brief   Application state definition.
+ */
+ FOC_APPL_STATE_T               Main_State;
+
   /*!
    * \brief   Struct that holds estimated speed values.
    */
-  Pse_Speed_T tSpeed;
+   Pse_Speed_T                  Speed;
+
   /*!
    * \brief   Filtered estimated speed in RPM.
    */
-  int16_t sFilteredSpeed;
+   int16_t                      FilteredSpeed;
+
+  /*!
+   * \brief   PI-controller state parameters for speed controller.
+   */
+   Math_PI_Controller_State_T   SpeedPIControlState;
+
+  /*!
+   * \brief   Hall sensor calibration state.
+   */
+   CalibrationStateT            HallSensorCalibrationState;
+
+  /*!
+   * \brief   Low pass speed filter state.
+   */
+   int32_t                      SpeedFilterState;
+
+  /*!
+   * \brief   PI-controller state parameters for field-weakening controller.
+   */
+   Math_PI_Controller_State_T   FWPIControlState;
+
+}ApplicationStateT;
+
+
+typedef struct {
+
+  /*!
+   * \brief   PI-controller parameters for speed controller.
+   */
+   Math_PI_Controller_Parameter_T SpeedPIControlPar;
+  /*!
+   * \brief   PI-controller parameters for field-weakening controller.
+   */
+   Math_PI_Controller_Parameter_T FWPIControlPar;
+  /*!
+   * \brief   Hall sensor calibration parameters.
+   */
+   CalibrationParameterT          HallSensorCalibrationPar;
+
+}ApplicationParameterT;
+
+
+typedef struct{
+  /*!
+   * \brief   User requested speed in RPM.
+  */
+  int16_t             UsrReqSpeed;
+
   /*!
    * \brief   Requested current vector in DQ frame.
    * \details Output of speed controller.
    */
-  Math_Vector_DQ_T tReqCurrent;
-#if (PAR_USE_OPENLOOP == 1)
+   Math_Vector_DQ_T   ReqCurrent;
   /*!
    * \brief   Requested voltage vector in DQ frame, for open-loop control.
    */
-  Math_Vector_DQ_T tReqVoltage;
-#endif /*PAR_USE_OPENLOOP*/
-  /*!
-   * \brief   PI-controller parameters for speed controller.
-   */
-  Math_PI_Controller_Parameter_T tPIControlPar;
-  /*!
-   * \brief   PI-controller state parameters for speed controller.
-   */
-  Math_PI_Controller_State_T tPIControlState;
-  /*!
-   * \brief   PI-controller parameters for field-weakening controller.
-   */
-  Math_PI_Controller_Parameter_T tFWPIControlPar;
-  /*!
-   * \brief   PI-controller state parameters for field-weakening controller.
-   */
-  Math_PI_Controller_State_T tFWPIControlState;
-  /*!
-   * \brief   Timer handler for the FOC_APPL main task
-   */
-  DRV_TIM_HANDLE_T tTimerTask;
-} FOC_APPL_DATA_T;
+   Math_Vector_DQ_T   ReqVoltage;
+
+}ApplicationControlT;
+
+
+ApplicationParameterT App_ms_Parameters;
+ApplicationStateT     App_ms_State;
+ApplicationControlT   App_ms_Control;
+
+
+/*!
+ * \brief   Indicates if the motor is running
+ */
+bool                  bMotorRunning;
+/*!
+ * \brief   Timer handler for the FOC_APPL main task
+ */
+DRV_TIM_HANDLE_T      tTimerTask;
+
+/*!
+   * \brief   'Counter to detect motor stall.
+*/
+uint16_t              App_mu16_StallCounter10ms;
+/*!
+   * \brief   Switch to manual mode.
+*/
+bool                  App_mb_ManualMode;
 
 typedef struct MPWM_SPI_FAULT_STATUS_DICTIONARY_Ttag
 {
@@ -133,7 +177,7 @@ void FOC_APPL_Print_GDU_Errors()
   if(ulFaultRegisters & MPWM_SPI_FAULT_STATUS_FAULT)
   {
     printf("The following fault flags are set in the GDU:\r\n");
-    for(i = 2; i < MPWM_FAULT_COUNT; i++)
+    for(i = 2; i < 23; i++)
     {
       if(g_tMPWM_SPI_Fault_Dictionary[i].luFaultCode & ulFaultRegisters)
       {
@@ -146,57 +190,57 @@ void FOC_APPL_Print_GDU_Errors()
 /*!
  * \brief Sets motor speed in RPM
  */
-extern uint16_t FOC_APPL_setSpeedSetpoint(uint16_t uSpeed, FOC_APPL_HANDLE_T tHnd)
+extern uint16_t FOC_APPL_setSpeedSetpoint(uint16_t uSpeed)
 {
-  FOC_APPL_DATA_T * ptData = (FOC_APPL_DATA_T *) tHnd;
-  if(!ptData)
+
+  App_ms_Control.UsrReqSpeed = uSpeed;
+  if(App_ms_Control.UsrReqSpeed)
   {
-    assert(0);
-  }
-  ptData->sUsrReqSpeed = uSpeed;
-  if(ptData->sUsrReqSpeed)
-  {
-    ptData->bMotorRunning = true;
+    bMotorRunning = true;
   }
   else
   {
-    ptData->bMotorRunning = false;
+    bMotorRunning = false;
   }
-  return ptData->sUsrReqSpeed;
+  return App_ms_Control.UsrReqSpeed;
 }
 /*!
  * \brief Returns current motor speed in RPM
  */
-uint16_t FOC_APPL_getSpeed(FOC_APPL_HANDLE_T tHnd)
+uint16_t FOC_APPL_getSpeed()
 {
-  FOC_APPL_DATA_T * ptData = (FOC_APPL_DATA_T *) tHnd;
-  if(!ptData)
-  {
-    assert(0);
-  }
-
-  return ptData->sFilteredSpeed;
+  return App_ms_State.FilteredSpeed;
 }
+
 /**
  * \brief   Application speed controller.
  * \image   html "Field-Weakening Method.svg"
  */
-static void FOC_APPL_SpeedController(FOC_APPL_DATA_T * ptData);
+static void FOC_APPL_SpeedController();
 /*!
  * \brief Reset speed controller values.
  */
-static void FOC_APPL_ResetSpeedController(FOC_APPL_DATA_T * ptData);
+static void FOC_APPL_ResetSpeedController();
+
+/**
+* \brief   Application calibration state.
+*/
+static void FOC_APPL_Calibration();
+/**
+* \brief   Stall Detection.
+*/
+static bool FOC_APPL_StallDetection(int16_t as16_RequestedSpeed, int16_t as16_MeasuredSpeed);
 /*!
  * \brief Main application loop.
  * \image    html "Speed Request.svg"
  */
-static void FOC_APPL_Main(void * pvDriverHandle, void * pvUserHandle);
+static void FOC_APPL_Main();
 
 /**
  * \brief   Application state machine function.
  * \image   html "Main State Machine.svg"
  */
-static void FOC_APPL_StateMachine(FOC_APPL_DATA_T * ptData);
+static void FOC_APPL_StateMachine();
 
 /**
  * \MPWM interrupt handler
@@ -221,6 +265,14 @@ static void FOC_APPL_Prepare()
   mpwm_Start();
   adc_Start();
   Foc_Init();
+
+  App_ms_Parameters.HallSensorCalibrationPar.s16_SamplingSpeedRPM                = CALIBRATION_SAMPLING_RPM;
+  App_ms_Parameters.HallSensorCalibrationPar.u16_WaitTimeBetweenEachSample10Msec = 1;
+  App_ms_Parameters.HallSensorCalibrationPar.f_RequestedVoltage                  = 0.12f;
+  App_ms_Parameters.HallSensorCalibrationPar.s16_NumberOfTurns                   = 4;
+  App_ms_Parameters.HallSensorCalibrationPar.u16_WaitTimeAfterAlignment10Msec    = 50;
+  App_ms_Parameters.HallSensorCalibrationPar.u16_MaximumDeviationAngle           = CALIBRATION_MAX_DEVIATION_ANGLE;
+  App_mb_ManualMode = false;
 }
 
 /*!
@@ -237,52 +289,38 @@ extern DRV_STATUS_E FOC_APPL_checkGDUError()
  * \return  DRV_OK
  *          DRV_ERROR
  */
-DRV_STATUS_E FOC_APPL_init(FOC_APPL_HANDLE_T * ptHnd)
+DRV_STATUS_E FOC_APPL_init()
 {
   DRV_STATUS_E eRet; /* driver status declaration */
   void * pvUserParam; /*user param for FOC_APPL_Main */
-  DRV_TIM_PRELOAD_VALUE_E const eTimerPeriod = (DRV_TIM_PRELOAD_VALUE_E) DRV_TIM_PRELOAD_VALUE_10ms; /* 5ms */
-  FOC_APPL_DATA_T* ptData = NULL;
+  DRV_TIM_PRELOAD_VALUE_E const eTimerPeriod = (DRV_TIM_PRELOAD_VALUE_E) DRV_TIM_PRELOAD_VALUE_10ms; /* 10ms */
+
 
   FOC_APPL_Prepare();
 
-  ptData = malloc(sizeof(FOC_APPL_DATA_T));
-  if(!ptData)
-  {
-    assert(0);
-  }
+  memset(&(tTimerTask), 0, sizeof(DRV_TIM_HANDLE_T));
 
-  memset(&(ptData->tTimerTask), 0, sizeof(DRV_TIM_HANDLE_T));
-  *ptHnd = ptData;
-
-  ptData->EFOC_APPLState = FOC_APPL_IDLE;
-  ptData->sUsrReqSpeed = 0;
-  ptData->tSpeed.MechSpeedRPM = 0;
   Pse_Init();
 
-  FOC_APPL_ResetSpeedController(ptData);
+  FOC_APPL_ResetSpeedController();
 
-  ptData->tReqCurrent.f_d = 0;
-  ptData->tReqCurrent.f_q = 0;
 
-  ptData->bMotorRunning = false;
+  bMotorRunning = false;
 
   /** Configure the timer peripheral */
-  ptData->tTimerTask.tConfiguration.eDeviceID = DRV_TIM_DEVICE_ID_GPIOCNTR0; /** DRV_TIM_DEVICE_ID_SYSTICK, DRV_TIM_DEVICE_ID_TIMER0/1/2 or DRV_TIM_DEVICE_ID_GPIOCNTR0/1/2 can be chose */
-  ptData->tTimerTask.tConfiguration.eDioIdInputReference = DRV_DIO_ID_GPIO_0; /** DIO Input Reference must be set for GPIOCNT timer */
-  ptData->tTimerTask.tConfiguration.eOperationMode = DRV_OPERATION_MODE_IRQ; /** interrupt mode */
-  ptData->tTimerTask.tConfiguration.tPreloadValue = eTimerPeriod; /** 5ms*/
-  ptData->tTimerTask.tConfiguration.eCountingMode = DRV_TIM_COUNTING_MODE_CONTINUOUS; /** continuous mode */
+  tTimerTask.tConfiguration.eDeviceID = DRV_TIM_DEVICE_ID_GPIOCNTR0; /** DRV_TIM_DEVICE_ID_SYSTICK, DRV_TIM_DEVICE_ID_TIMER0/1/2 or DRV_TIM_DEVICE_ID_GPIOCNTR0/1/2 can be chose */
+  tTimerTask.tConfiguration.eDioIdInputReference = DRV_DIO_ID_GPIO_0; /** DIO Input Reference must be set for GPIOCNT timer */
+  tTimerTask.tConfiguration.eOperationMode = DRV_OPERATION_MODE_IRQ; /** interrupt mode */
+  tTimerTask.tConfiguration.tPreloadValue = eTimerPeriod; /** 5ms*/
+  tTimerTask.tConfiguration.eCountingMode = DRV_TIM_COUNTING_MODE_CONTINUOUS; /** continuous mode */
 
   /** initialize the timer device */
-  if(DRV_OK != DRV_TIM_Init(&ptData->tTimerTask))
+  if(DRV_OK != DRV_TIM_Init(&tTimerTask))
   {
     return DRV_ERROR;
   }
 
-  pvUserParam = ptData;
-
-  eRet = DRV_TIM_IRQAttach(&ptData->tTimerTask, FOC_APPL_Main, pvUserParam); /* attaches the callback function */
+  eRet = DRV_TIM_IRQAttach(&tTimerTask, FOC_APPL_Main, pvUserParam); /* attaches the callback function */
 
   if(DRV_OK != eRet)
   {
@@ -293,7 +331,7 @@ DRV_STATUS_E FOC_APPL_init(FOC_APPL_HANDLE_T * ptHnd)
   DRV_NVIC_SetPriority(mpwm_IRQn,1,0);
 
 
-  eRet = DRV_TIM_Start(&ptData->tTimerTask); /* Starts the timer */
+  eRet = DRV_TIM_Start(&tTimerTask); /* Starts the timer */
   if(DRV_OK != eRet)
   {
     return DRV_ERROR;
@@ -301,37 +339,48 @@ DRV_STATUS_E FOC_APPL_init(FOC_APPL_HANDLE_T * ptHnd)
 
   gb_helpPrinted = false;
 
-  ptData->bMotorRunning = true;
+  bMotorRunning = true;
 
-//  ptData->bMotorRunning = true;
   return DRV_OK;
 }
 
 /**
  \brief   FOC application Speed Controller
  \details calculate and send a current setpoint to the FOC
- \param [in]    ptData  FOC APPL data struct
- */
-static void FOC_APPL_SpeedController(FOC_APPL_DATA_T * ptData)
-{
-  int16_t ls16_SpeedError;
-  float lf_FWError;
-  float lf_SquareSum;
-  Math_Vector_DQ_T s_VoltageVec = Foc_GetRequestVoltage();
 
-#if (PAR_USE_HALL_SPEED == 0)
-  ls16_SpeedError = ptData->sUsrReqSpeed - ptData->tSpeed.MechSpeedRPM;
-#else
-  /* Speed estimated only by hall sensors requires filtering. */
-  ls16_SpeedError = ptData->sUsrReqSpeed - ptData->sFilteredSpeed;
-#endif
-  /* Control q current */
-  ptData->tReqCurrent.f_q = Math_PIController(&ptData->tPIControlState, &ptData->tPIControlPar, (float) ls16_SpeedError);
+ */
+
+static void FOC_APPL_SpeedController()
+{
+  float lf_FWError;
+  float lf_SpeedError;
+  float lf_SquareSum;
+  float lf_MaxIqCurrent;
+  float lf_MaxIqCurrentSquare;
+  Math_Vector_DQ_T ls_VoltageVec = Foc_GetRequestVoltage();
+
+  /* Speed estimated filtering. */
+  lf_SpeedError = (float)App_ms_Control.UsrReqSpeed - (float)App_ms_State.FilteredSpeed;
 
   /* Control d current, Field weakening  */
-  lf_SquareSum = (s_VoltageVec.f_d * s_VoltageVec.f_d) + (s_VoltageVec.f_q * s_VoltageVec.f_q);
-  lf_FWError = PAR_FIELDWEAK_START_VOLTAGE_RATIO - Math_Sqrt(lf_SquareSum, 1.0f, 2);
-  ptData->tReqCurrent.f_d = Math_PIController(&ptData->tFWPIControlState, &ptData->tFWPIControlPar, lf_FWError);
+  lf_SquareSum = (ls_VoltageVec.f_d * ls_VoltageVec.f_d) + (ls_VoltageVec.f_q * ls_VoltageVec.f_q);
+  lf_FWError                    = PAR_FIELDWEAK_START_VOLTAGE_RATIO - Math_Sqrt(lf_SquareSum, 1.0f, 2);
+  App_ms_Control.ReqCurrent.f_d = Math_PIController(&App_ms_State.FWPIControlState, &App_ms_Parameters.FWPIControlPar, lf_FWError);
+
+  /* Limit Iq current to maintain max phase current */
+  lf_MaxIqCurrentSquare = (PAR_MAX_PHASE_CURRENT_AMP * PAR_MAX_PHASE_CURRENT_AMP) - (App_ms_Control.ReqCurrent.f_d*App_ms_Control.ReqCurrent.f_d);
+
+  if (lf_MaxIqCurrentSquare < 0.0f){
+    lf_MaxIqCurrentSquare = 0.0f;
+  }
+
+  lf_MaxIqCurrent = Math_Sqrt(lf_MaxIqCurrentSquare, 2.5f,2);
+  /* Limit q current by setting upper limit */
+  App_ms_Parameters.SpeedPIControlPar.f_UpperLimit = lf_MaxIqCurrent;
+
+  /* Control q current */
+  App_ms_Control.ReqCurrent.f_q = Math_PIController(&App_ms_State.SpeedPIControlState, &App_ms_Parameters.SpeedPIControlPar, (float) lf_SpeedError);
+
 }
 
 /**
@@ -339,47 +388,48 @@ static void FOC_APPL_SpeedController(FOC_APPL_DATA_T * ptData)
  \details Reset speed controller parameters
  \param [in,out] ptData  FOC APPL data struct
  */
-static void FOC_APPL_ResetSpeedController(FOC_APPL_DATA_T * ptData)
+static void FOC_APPL_ResetSpeedController()
 {
-  ptData->tPIControlPar.f_KP = PAR_SPEED_CONTROLLER_KP;
-  ptData->tPIControlPar.f_KI = PAR_SPEED_CONTROLLER_KI;
-  ptData->tPIControlPar.f_UpperLimit = PAR_MAX_PHASE_CURRENT_AMP;
-  ptData->tPIControlPar.f_LowerLimit = -PAR_MAX_PHASE_CURRENT_AMP;
-  ptData->tPIControlState.f_integral = 0.0f;
+  App_ms_Parameters.SpeedPIControlPar.f_KP = PAR_SPEED_CONTROLLER_KP;
+  App_ms_Parameters.SpeedPIControlPar.f_KI = PAR_SPEED_CONTROLLER_KI;
+  App_ms_Parameters.SpeedPIControlPar.f_UpperLimit = PAR_MAX_PHASE_CURRENT_AMP;
+  App_ms_Parameters.SpeedPIControlPar.f_LowerLimit = 0.0f;
+  App_ms_State.SpeedPIControlState.f_integral = 0.0f;
 
-  ptData->tFWPIControlPar.f_KP = PAR_FIELDWEAK_CONTROLLER_KP;
-  ptData->tFWPIControlPar.f_KI = PAR_FIELDWEAK_CONTROLLER_KI;
-  ptData->tFWPIControlPar.f_UpperLimit = 0.0f;
-  ptData->tFWPIControlPar.f_LowerLimit = -PAR_MAX_PHASE_CURRENT_AMP;
-  ptData->tFWPIControlState.f_integral = 0.0f;
+  App_ms_Parameters.FWPIControlPar.f_KP = PAR_FIELDWEAK_CONTROLLER_KP;
+  App_ms_Parameters.FWPIControlPar.f_KI = PAR_FIELDWEAK_CONTROLLER_KI;
+  App_ms_Parameters.FWPIControlPar.f_UpperLimit = 0.0f;
+  App_ms_Parameters.FWPIControlPar.f_LowerLimit = -1.0f;
+  App_ms_State.FWPIControlState.f_integral = 0.0f;
 
-  ptData->tReqCurrent.f_q = 0.0f;
-  ptData->tReqCurrent.f_d = 0.0f;
-  ptData->tSpeed.MechSpeedRPM = 0;
-  ptData->sFilteredSpeed = 0;
+  App_ms_Control.ReqCurrent.f_q   = 0.0f;
+  App_ms_Control.ReqCurrent.f_d   = 0.0f;
+  App_ms_State.Speed.MechSpeedRPM = 0;
+  App_ms_State.FilteredSpeed = 0;
+  MATH_LowPassFilter_Init(&App_ms_State.SpeedFilterState, 0);
 }
 
 /**
  \brief   FOC main application
- \details called every 5ms
- \param [in,out] pvUserHandle  FOC APPL data struct
+ \details called every 10ms
+
  */
-static void FOC_APPL_Main(void * pvDriverHandle, void * pvUserHandle)
+static void FOC_APPL_Main()
 {
-  FOC_APPL_DATA_T * ptData = (FOC_APPL_DATA_T*) pvUserHandle;
+
 #ifdef DEMO_USE_POTENTIOMETER
   uint16_t lu16_pot;
   lu16_pot = adc_GetPotValue();
   /* Get requested speed from user-interface */
-  if(ptData->bMotorRunning)
+  if(bMotorRunning)
   {
     if(lu16_pot >= PAR_POT_MIN_SPEED_REQ_DIG)
     {
-      ptData->sUsrReqSpeed = (int16_t) (PAR_MIN_SPEED_RPM + (float) (lu16_pot - PAR_POT_MIN_SPEED_REQ_DIG) * APP_POT_SPEED_SLOPE);
+      App_ms_Control.UsrReqSpeed = (int16_t) (PAR_MIN_SPEED_RPM + (float) (lu16_pot - PAR_POT_MIN_SPEED_REQ_DIG) * APP_POT_SPEED_SLOPE);
     }
     else if(lu16_pot < PAR_POT_HYSTERESIS_DIG)
     {
-      ptData->sUsrReqSpeed = 0u;
+      App_ms_Control.UsrReqSpeed = 0u;
     }
     else /* Do not change speed*/
     {
@@ -389,91 +439,182 @@ static void FOC_APPL_Main(void * pvDriverHandle, void * pvUserHandle)
 #endif /* DEMO_USE_POTENTIOMETER*/
 
 #if (PAR_USE_HALL_SPEED == 0)
-  ptData->tSpeed = Pse_EstimateSpeed(); /* Get rotor speed from FOC_APPL/Pse using QEI*/
+  App_ms_State.Speed = Pse_EstimateSpeed(); /* Get rotor speed from FOC_APPL/Pse using QEI*/
 #else
-  ptData->tSpeed = Pse_EstimateSpeedHall(); /* Get rotor speed from FOC_APPL/Pse using Hall*/
+  App_ms_State.Speed = Pse_EstimateSpeedHall(); /* Get rotor speed from FOC_APPL/Pse using Hall*/
 #endif /*PAR_USE_HALL_SPEED*/
-  ptData->sFilteredSpeed = ptData->sFilteredSpeed + (ptData->tSpeed.MechSpeedRPM - ptData->sFilteredSpeed) / 4;
-  /* Check nFault - GDU error signal only if GDU is enabled */
-  if((mpwm_app->mpwm_irq_raw_b.eci_val == 0) && (pio_app->pio_oe_b.val & DRV_DIO_MSK_PIO_8))
-  {
-    ptData->EFOC_APPLState = FOC_APPL_ERROR;
-    mpwm_app->mpwm_cfg_b.eci_inv = ~(mpwm_app->mpwm_cfg_b.eci_inv); /* Inversion is needed since signal is flip-flop */
-  }
-  /* Run App_StateMachine */
-  FOC_APPL_StateMachine(ptData);
+  App_ms_State.FilteredSpeed = MATH_LowPassFilter(&App_ms_State.SpeedFilterState, App_ms_State.Speed.MechSpeedRPM, 8190);
 
-#ifdef USE_XCP
-  /* xcp interface: internal debug use only */
-  XcpnetX90SerialTask1ms();
-#endif /*USE_XCP*/
+  if (App_mb_ManualMode){
+    App_ms_State.Main_State = FOC_APPL_MANUAL;
+  }
+
+  /* Run App_StateMachine */
+  FOC_APPL_StateMachine();
+
   /* Acknowledge IRQ */
   gpio_app->gpio_app_irq_raw = gpio_app->gpio_app_irq_raw;
 }
 
 /**
  \brief   FOC application state machine
- \param [in,out] ptData  FOC APPL data struct
  */
-static void FOC_APPL_StateMachine(FOC_APPL_DATA_T * ptData)
+static void FOC_APPL_StateMachine()
 {
   FOC_APPL_STATE_T ls_State;
-  ls_State = ptData->EFOC_APPLState;
+  ls_State = App_ms_State.Main_State;
+  Math_Vector_DQ_T ls_ZeroVector;
+  ls_ZeroVector.f_d = 0.0f;
+  ls_ZeroVector.f_q = 0.0f;
 
   switch (ls_State)
   {
   default:
   case FOC_APPL_IDLE: /*  */
     Foc_TransitState(FOC_IDLE);
-    if(ptData->sUsrReqSpeed != 0u)
+    if(App_ms_Control.UsrReqSpeed != 0u)
     {
-      ptData->EFOC_APPLState = FOC_APPL_RUN;
+      if (App_ms_State.HallSensorCalibrationState.e_State == CALIBRATION_MODULE_DONE) {
+        App_ms_State.Main_State = FOC_APPL_RUN;
+      } else{
+        App_ms_State.Main_State = FOC_APPL_CALIBRATE;
+      }
     }
     break;
   case FOC_APPL_RUN:/* */
-    if(ptData->sUsrReqSpeed == 0u)
+    if(App_ms_Control.UsrReqSpeed == 0u)
     {
-      ptData->EFOC_APPLState = FOC_APPL_STOP;
+      App_ms_State.Main_State = FOC_APPL_STOP;
     }
-    FOC_APPL_SpeedController(ptData);
-    Foc_SetRequestCurrent(ptData->tReqCurrent);
+    FOC_APPL_SpeedController();
+    Foc_SetRequestCurrent(App_ms_Control.ReqCurrent);
     Foc_TransitState(FOC_CURRENT_CONTROL);
+    if(FOC_APPL_StallDetection(App_ms_Control.UsrReqSpeed, App_ms_State.FilteredSpeed))
+    {
+      App_ms_State.Main_State = FOC_APPL_ERROR;
+    }
+
     break;
   case FOC_APPL_STOP:/* */
-    FOC_APPL_SpeedController(ptData);
-    Foc_SetRequestCurrent(ptData->tReqCurrent);
-    if(ptData->sUsrReqSpeed != 0u)
+    Foc_SetRequestCurrent(ls_ZeroVector);
+    if(App_ms_Control.UsrReqSpeed != 0u)
     {
-      ptData->EFOC_APPLState = FOC_APPL_RUN;
+      App_ms_State.Main_State = FOC_APPL_RUN;
     }
     else
     {
-      if(ptData->tSpeed.MechSpeedRPM <= PSE_SYNC_MECH_SPEED_RPM)
+      if(App_ms_State.FilteredSpeed <= PSE_SYNC_MECH_SPEED_RPM)
       {
-        ptData->EFOC_APPLState = FOC_APPL_IDLE;
-        FOC_APPL_ResetSpeedController(ptData);
+        App_ms_State.Main_State = FOC_APPL_IDLE;
+        FOC_APPL_ResetSpeedController();
         Pse_Init();
       }
     }
     break;
-  case FOC_APPL_ERROR:/*  */
-    if(!gb_helpPrinted)
-    {
-      FOC_APPL_Print_GDU_Errors();
+  case FOC_APPL_CALIBRATE:
+    if (App_ms_State.HallSensorCalibrationState.e_State == CALIBRATION_MODULE_DONE){
+      Pse_Init();
+      FOC_APPL_ResetSpeedController();
+      App_ms_State.Main_State = FOC_APPL_IDLE;
     }
-    gb_helpPrinted = true;
+    else if (App_ms_State.HallSensorCalibrationState.e_State == CALIBRATION_MODULE_FAILED){
+      App_ms_State.Main_State = FOC_APPL_ERROR;
+    }else{
+      Foc_TransitState(FOC_VOLTAGE_CONTROL);
+      if (Foc_GetFOCState() == FOC_VOLTAGE_CONTROL) {
+        FOC_APPL_Calibration();
+      }
+    }
+    break;
+  case FOC_APPL_MANUAL:
+      Foc_TransitState(FOC_CURRENT_CONTROL);
+    break;
+
+  case FOC_APPL_ERROR:/*  */
+  //TODO: Not changed but needs to be tested again to make sure it still works.
     Foc_TransitState(FOC_FAILED);
-    if(mpwm_app->mpwm_irq_raw_b.eci_ks_state == 1U)/* iIf error clears */
+  //  if(!gb_helpPrinted)
     {
-      if(ptData->sUsrReqSpeed == 0u)
+      //FOC_APPL_Print_GDU_Errors();
+    }
+  //  gb_helpPrinted = true;
+  //  Foc_TransitState(FOC_FAILED);
+  //  if(mpwm_app->mpwm_irq_raw_b.eci_ks_state == 1U)/* iIf error clears */
+    {
+    //  if(ptData->sUsrReqSpeed == 0u)
       {
-        gb_helpPrinted = false;
-        ptData->EFOC_APPLState = FOC_APPL_STOP;
+     //   gb_helpPrinted = false;
+     //   ptData->EFOC_APPLState = FOC_APPL_STOP;
       }
     }
     break;
   }
 }
+static void FOC_APPL_Calibration(){
+  CalibrationControlOutputT ls_Output;
+  CalibrationResultT        le_CalibrationResult;
+  CalibrationErrorT         ls_CalibrationError;
+  uint16_t lu16_Position;
+
+  lu16_Position = Pse_GetPosition().u16_Theta;
+  Calibration_Task10ms(&App_ms_State.HallSensorCalibrationState, &App_ms_Parameters.HallSensorCalibrationPar, sens_HallState(), lu16_Position, &ls_Output);
+
+  switch (ls_Output.e_Mode) {
+    case CALIBRATION_CONTROL_SET_POSITION:
+      Foc_TransitState(FOC_VOLTAGE_CONTROL);
+      Pse_SetPositionManually(ls_Output.s16_ElectricalAngle);
+      Foc_SetRequestVoltage(ls_Output.s_RequestedVoltage);
+      break;
+    case CALIBRATION_CONTROL_SET_SPEED:
+      Foc_TransitState(FOC_VOLTAGE_CONTROL);
+      Pse_SetSpeedManually(ls_Output.s16_SpeedRPM);
+      Foc_SetRequestVoltage(ls_Output.s_RequestedVoltage);
+      break;
+    default:
+    case CALIBRATION_CONTROL_OFF:
+      Foc_TransitState(FOC_IDLE);
+      break;
+  }
+
+  le_CalibrationResult = Calibration_GetStatus(&App_ms_State.HallSensorCalibrationState);
+  switch (le_CalibrationResult) {
+    case CALIBRATION_RESULT_OK:
+      /* Copy calibration results */
+      Pse_SetHallBoundaries((uint16_t *) &App_ms_State.HallSensorCalibrationState.s_Sector.u16_Calibrated,
+                            (uint8_t *) &App_ms_State.HallSensorCalibrationState.u8_HallStates);
+      break;
+
+    case CALIBRATION_RESULT_FAILED:
+      /* enter safe application state */
+      Calibration_GetErrors(&App_ms_State.HallSensorCalibrationState, &ls_CalibrationError);
+      break;
+
+    default:
+    case CALIBRATION_RESULT_BUSY:
+      /* Wait */
+      break;
+  }
+
+}
+static bool FOC_APPL_StallDetection(int16_t as16_RequestedSpeed, int16_t as16_MeasuredSpeed){
+
+  if(Math_s16_Abs(as16_RequestedSpeed -  as16_MeasuredSpeed) > STALL_DETECTION_SPEED_DIFFERENCE){
+    /* Increase stall counter */
+    App_mu16_StallCounter10ms++;
+  }else{
+    /* Reset stall counter */
+    App_mu16_StallCounter10ms = 0u;
+  }
+
+  //if ( App_mu16_StallCounter10ms > STALL_DETECTION_TIME_10MS){
+    /* If speed can not be reached within defined time, function is set to stall. */
+    //return true;
+  //} else
+  {
+    return false;
+  }
+}
+
 
 /**
  \brief The de-initialize function is supposed to reset the handle
@@ -481,25 +622,19 @@ static void FOC_APPL_StateMachine(FOC_APPL_DATA_T * ptData)
  \return DRV_OK
  \       DRV_ERROR
  */
-DRV_STATUS_E FOC_APPL_deInit(FOC_APPL_HANDLE_T tHnd)
+DRV_STATUS_E FOC_APPL_deInit()
 {
   DRV_STATUS_E eRet; /* driver status declaration */
-  FOC_APPL_DATA_T * ptData = (FOC_APPL_DATA_T *) tHnd;
-  if(!ptData)
-  {
-    assert(0);
-  }
 
-  ptData->sUsrReqSpeed = 0;
   mpwm_DisableGDU();
 
-  eRet = DRV_TIM_Stop(&ptData->tTimerTask); /* Stops the timer */
+  eRet = DRV_TIM_Stop(&tTimerTask); /* Stops the timer */
   if(DRV_OK != eRet)
   {
     return DRV_ERROR;
   }
 
-  eRet = DRV_TIM_Stop(&ptData->tTimerTask); /* Stops the timer */
+  eRet = DRV_TIM_Stop(&tTimerTask); /* Stops the timer */
   if(DRV_OK != eRet)
   {
     return DRV_ERROR;
@@ -516,9 +651,6 @@ DRV_STATUS_E FOC_APPL_deInit(FOC_APPL_HANDLE_T tHnd)
   {
     return DRV_ERROR;
   }
-
-  free(ptData);
-  ptData = NULL;
 
   return DRV_OK;
 }

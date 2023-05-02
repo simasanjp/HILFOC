@@ -1,5 +1,5 @@
 /**************************************************************************************//*
-$Id: README.txt 8341 2020-11-06 16:49:28Z AGross $:
+$Id: README.txt 9791 2022-02-09 12:37:37Z ebendels $: 
 **************************************************************************************//**
 \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
 \if netx_drv_mainpage
@@ -937,6 +937,8 @@ Changelog
 
 Version       | Date       | Who  | Description
 --------------|------------|------|-----------------------------------
+V0.1.3.0      | 2022-02-09 | EB   | Versioning, usage for 'Template'
+V0.1.2.0      | 2022-01-28 | JZ   | Versioning
 V0.1.0.3      | 2020-11-06 | AGR  | SPI and I2C
 V0.1.0.2      | 2020-09-28 | AGR  | GCC Note
 V0.1.0.1      | 2020-09-28 | AGR  | Versioning
@@ -959,6 +961,13 @@ V0.0.2.0      | 2018-03-01 | AGR  | CAN Pre-Beta
 V0.0.1.0      | 2018-01-26 | AGR  | Pre-Beta
 V0.0.0.3564   | 2018-01-16 | AGR  | Alpha
 V0.0.0.3452   | 2017-11-06 | AGR  | Pre-Alpha
+
+### V0.1.3.0 Versioning, note on some driver-code
+- ADC added more description-text in .c and .h file
+- SPI introduced a fix for getting SQI-Mode 'using DMA' working
+
+### V0.1.2.0 Versioning
+- version with updated wscript
 
 ### V0.1.0.3 SPI and I2C
 - SPI fixed size correction

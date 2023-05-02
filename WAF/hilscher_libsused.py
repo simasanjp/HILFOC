@@ -3,107 +3,40 @@
 ########################################################################################
 # Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
 ########################################################################################
-# $Id: hilscher_libsused.py 482 2019-10-22 08:30:22Z andreasme $:
+# $Id: hilscher_libsused.py 561 2021-11-19 10:01:15Z AMesser $:
 #
 # Description:
 #
 # Waf module to generate libsused files
 ########################################################################################
 from waflib import Logs, Task, Utils
-from waflib.TaskGen import feature, after_method
+from waflib.TaskGen import taskgen_method, feature, after_method
 from waflib.Configure import conf
 from collections import namedtuple
 from waflib.Context import STDOUT, BOTH
 import os
 import re
 
-@feature('libsused')
-@after_method('apply_link','build_nxo','build_nxf', 'build_nxi')
-def build_libsused(self):
+@taskgen_method
+def get_generators_recursive(self, tg):
     bld = self.bld
 
+    result = set()
+    stack  = set(Utils.to_list(getattr(tg, 'use', [])))
+
+    while stack:
+        x = bld.get_tgen_by_name(stack.pop())
+
+        if x not in result:
+            result.add(x)
+            stack.update(set(Utils.to_list(getattr(x, 'use', []))))
+
+    return result
+
+
+def build_libsused_common(self, output, generators, referenced_node, install_name):
     inputs       = []
     input_tgens  = []
-
-    def libsused_get_generators_recursive(generators, tg):
-        stack = set(Utils.to_list(getattr(tg, 'use', [])))
-
-        while stack:
-            x = bld.get_tgen_by_name(stack.pop())
-
-            if x not in generators:
-                generators.add(x)
-                stack.update(set(Utils.to_list(getattr(x, 'use', []))))
-
-    generators = set()
-    referenced_node = None
-
-    use = self.to_list(getattr(self,'use',[]))
-    if len(use) == 0:
-      # Generate global libs_used file
-      output     = self.path.find_or_declare(self.target)
-      install_name = output.name
-
-      for g in self.bld.groups:
-        for tg in g:
-            features = self.to_list(getattr(tg, 'features', ''))
-
-            # Only add version information of libraries referenced in programs, or other libraries
-            if 'cprogram' in features or 'cstlib' in features:
-                libsused_get_generators_recursive(generators,tg)
-
-            if 'cstlib' in features:
-                generators.add(tg)
-
-    else:
-      if 'cprogram' in self.features:
-          # The 'libsused' features was enabled on this component
-          output = self.path.find_or_declare(self.target + '_usedlibs.txt')
-          install_name = output.name
-
-          libsused_get_generators_recursive(generators,self)
-      else:
-          if 'nxf' in self.features:
-              output = self.path.find_or_declare(self.target + '_usedlibs.txt')
-              install_name = output.name
-
-              tg     = bld.get_tgen_by_name(use[0])
-              referenced_node = self.nxf_task.outputs[0]
-          elif 'nxi' in self.features:
-              output = self.path.find_or_declare(self.target + '_usedlibs.txt')
-              install_name = output.name
-
-              tg     = bld.get_tgen_by_name(use[0])
-              referenced_node = self.nxi_task.outputs[0]
-          elif 'nxo' in self.features:
-              output = self.path.find_or_declare(self.target + '_usedlibs.txt')
-              install_name = output.name
-
-              tg = self
-              referenced_node = self.nxobuilder_task.outputs[0]
-          else:
-              # The component being investigated is passed in use component
-              # This is triggered by a call to bld.generate_libsused()
-
-              #generate a unique name for generated libsused file
-              unique_name = "_generated_" + ("_".join(Utils.split_path(self.name) + Utils.split_path(self.target)))
-
-              output = self.path.find_or_declare(unique_name)
-              install_name = Utils.split_path(self.target)[-1]
-              tg     = bld.get_tgen_by_name(use[0])
-
-              if not tg.posted:
-                  tg.post()
-
-              link_task = getattr(tg,'link_task',None)
-
-              if link_task:
-                  referenced_node = link_task.outputs[0]
-
-              for x in use[1:]:
-                  libsused_get_generators_recursive(generators,bld.get_tgen_by_name(x))
-
-          libsused_get_generators_recursive(generators,tg)
 
     for tg in generators:
         if 'cprogram' in tg.features:
@@ -140,37 +73,123 @@ def build_libsused(self):
         self.bld.install_as( "/".join(Utils.split_path(self.install_path) + [install_name]),\
                            output)
 
+@feature('libsused')
+@after_method('apply_link','build_nxo','build_nxf', 'build_nxi')
+def build_libsused(self):
+    bld = self.bld
+
+    referenced_node = None
+
+    use = self.to_list(getattr(self,'use',[]))
+
+    output = self.path.find_or_declare(self.target + '_usedlibs.txt')
+
+    if set(('cprogram','cstlib', 'stlib', 'cshlib', 'shlib')) & set(self.features) :
+        # The 'libsused' features was enabled on this component
+        tg = self
+        referenced_node = self.link_task.outputs[0]
+    elif 'nxo' in self.features:
+        tg = self
+        referenced_node = self.nxobuilder_task.outputs[0]
+    elif 'nxf' in self.features:
+        tg     = bld.get_tgen_by_name(use[0])
+        referenced_node = self.nxf_task.outputs[0]
+    elif ('nxi' in self.features) or ('mxf' in self.features):
+        tg     = bld.get_tgen_by_name(use[0])
+        referenced_node = self.nxi_task.outputs[0]
+    else:
+        bld.fatal(u'Failed to generate usedlibs for %s using features %s' % (self.target, self.features))
+
+    generators = self.get_generators_recursive(tg)
+
+    install_name = output.name
+    build_libsused_common(self, output, generators, referenced_node, install_name)
+
+@feature('libsused_global')
+@after_method('apply_link','build_nxo','build_nxf', 'build_nxi')
+def build_libsused_global(self):
+    output     = self.path.find_or_declare(self.target)
+    install_name = output.name
+
+    generators = set()
+
+    for g in self.bld.groups:
+        for tg in g:
+            features = self.to_list(getattr(tg, 'features', ''))
+
+            # Only add version information of libraries referenced in programs, or other libraries
+            if 'cprogram' in features or 'cstlib' in features:
+                generators |= self.get_generators_recursive(tg)
+
+            if 'cstlib' in features:
+                generators.add(tg)
+
+    build_libsused_common(self, output, generators, None, install_name)
+
+@feature('libsused_explicit')
+def build_libsused_explicit(self):
+    bld = self.bld
+
+    #generate a unique name for generated libsused file
+    unique_name = "_generated_" + ("_".join(Utils.split_path(self.name) + Utils.split_path(self.target)))
+
+    output = self.path.find_or_declare(unique_name)
+    install_name = Utils.split_path(self.target)[-1]
+
+    use = self.to_list(getattr(self,'use',[]))
+    tg  = bld.get_tgen_by_name(use[0])
+
+    referenced_node = None
+
+    if len(use) == 1:
+        if not tg.posted:
+            tg.post()
+
+        self.version = tg.version
+
+        link_task = getattr(tg,'link_task',None)
+
+        if link_task:
+            referenced_node = link_task.outputs[0]
+
+    generators = self.get_generators_recursive(tg)
+
+    for x in use[1:]:
+        generators |= self.get_generators_recursive(bld.get_tgen_by_name(x))
+
+    build_libsused_common(self, output, generators, referenced_node, install_name)
+
 @conf
 def generate_libsused(bld, name, target, use = [], **kw):
-  use = Utils.to_list(use)
+    use = Utils.to_list(use)
 
-  if use:
-      #user passed use parameter, so we need to check it
-      use = Utils.to_list(use)
-      if len(use) > 1:
-          # error, we only provide libsused generation for a single target
-          bld.fatal("Libused generation only works for a single target, and multiple targets (%u)were given via use" % len(use))
+    if len(use) > 1:
+        bld.fatal("Libused generation only works for a single target, and multiple targets (%u)were given via use" % len(use))
 
-      tg = bld.get_tgen_by_name(use[0])
-      if not 'cprogram' in getattr(tg, 'features', []):
-          # This is not a cprogram. So we try to check the used components
-          # e.g. a firmware target will have the cprogram target in use
-          for x in Utils.to_list(getattr(tg, 'use', [])):
-              tg = bld.get_tgen_by_name(x)
-              if 'cprogram' in getattr(tg, 'features', []):
-                  # We've found the possible target, so override use parameter from function call
-                  use = [tg.name]
-                  break
-          else:
-              # No cprogram found in given use component
-              bld.fatal("Libsused generation did not find any useable program for generation in use parameters (target=%r, use=%r)" % (name, use))
+    if use:
+        tg = bld.get_tgen_by_name(use[0])
+        if not 'cprogram' in getattr(tg, 'features', []):
+            # This is not a cprogram. So we try to check the used components
+            # e.g. a firmware target will have the cprogram target in use
+            for x in Utils.to_list(getattr(tg, 'use', [])):
+                tg = bld.get_tgen_by_name(x)
+                if 'cprogram' in getattr(tg, 'features', []):
+                    # We've found the possible target, so override use parameter from function call
+                    use = [tg.name]
+                    break
+            else:
+                # No cprogram found in given use component
+                bld.fatal("Libsused generation did not find any useable program for generation in use parameters (target=%r, use=%r)" % (name, use))
+        features = 'libsused_explicit'
+    else:
+        features = 'libsused_global'
 
-  bld(name             = name,
-      target           = target,
-      features         = 'libsused',
-      use              = use,
-      hidden_from_list = True,
-      **kw)
+    bld(name             = name,
+        target           = target,
+        features         = features,
+        use              = use,
+        hidden_from_list = "Internal",
+        **kw)
 
 class LibsusedTask(Task.Task):
     color   = 'PINK'

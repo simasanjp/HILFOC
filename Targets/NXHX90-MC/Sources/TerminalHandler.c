@@ -104,21 +104,21 @@ static void Term_TerminalCommandHandler(APP_DATA_T * ptData,
     case APP_TERMINAL_HANDLER_COMMAND_MOTOR_START:
     {
       printf("Received APP_TERMINAL_HANDLER_COMMAND_MOTOR_START\r\n");
-      FOC_APPL_setSpeedSetpoint(DEMO_MOTOR_START_SPEED, ptData->tFOC_APPLData);
+      FOC_APPL_setSpeedSetpoint(DEMO_MOTOR_START_SPEED);
       break;
     }
 
     case APP_TERMINAL_HANDLER_COMMAND_MOTOR_GET_SPEED:
     {
       printf("Received APP_TERMINAL_HANDLER_COMMAND_MOTOR_GET_SPEED\r\n");
-      printf("Current speed is %d RPM\r\n", FOC_APPL_getSpeed(ptData->tFOC_APPLData));
+      printf("Current speed is %d RPM\r\n", FOC_APPL_getSpeed());
       break;
     }
 
     case APP_TERMINAL_HANDLER_COMMAND_MOTOR_STOP:
     {
       printf("Received APP_TERMINAL_HANDLER_COMMAND_MOTOR_STOP\r\n");
-      FOC_APPL_setSpeedSetpoint(DEMO_MOTOR_STOP_SPEED, ptData->tFOC_APPLData);
+      FOC_APPL_setSpeedSetpoint(DEMO_MOTOR_STOP_SPEED);
       break;
     }
 

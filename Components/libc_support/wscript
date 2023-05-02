@@ -1,10 +1,16 @@
 def build(bld):
     
-    bld.toolchain   = "gccarmemb"
-    bld.platform  = "netx90"
+    toolchain = bld.env["UsedToolchain"]
+    if not toolchain:
+        bld.fatal('Environment parameter "UsedToolchain" is not available! Make sure to provide the environment parameter "UsedToolchain" in the root wscript file of your project. e.g.: conf.env["UsedToolchain"] = "gccarmemb"')
+    
+    platform  = bld.env["UsedPlatform"]
+    if not platform:
+        bld.fatal('Environment parameter "UsedPlatform" is not available! Make sure to provide the environment parameter "UsedPlatform" in the root wscript file of your project. e.g.: conf.env["UsedPlatform"]  = "netx90"')
+    
     comp_prefix = bld.get_name_prefix(
-        toolchain = bld.toolchain,
-        platform  = bld.platform)
+        toolchain = toolchain,
+        platform  = platform)
     
 # Component libc_support ---------------------------------------------------------
     netx_studio_sources = [
@@ -22,8 +28,8 @@ def build(bld):
         name            = comp_prefix + "libc_support",
         description     = "libc_support",
         displaygroup    = "Libraries",
-        platform        = bld.platform,
-        toolchain       = bld.toolchain, 
+        platform        = platform,
+        toolchain       = toolchain, 
         use             = [
                            "CMSIS_sdk",
                            "netx_drv_sdk",

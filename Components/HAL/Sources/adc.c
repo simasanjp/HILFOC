@@ -134,7 +134,19 @@ void adc_Initialize()
 
 void adc_Start()
 {
-  madc->madc_start = 0xF;
+  //madc->madc_start = 0xF;
+  madc->madc_start_b.start_adc0 = 1U;
+  madc->madc_start_b.start_adc1 = 1U;
+  madc->madc_start_b.start_adc2 = 1U;
+  madc->madc_start_b.start_adc3 = 1U;
+  madc_seq0->madc_seq_m0_b.trigger = (MPWM_HALF_PERIOD * 2) - 2U;
+  madc_seq1->madc_seq_m0_b.trigger = (MPWM_HALF_PERIOD * 2) - 2U;
+  madc_seq2->madc_seq_m0_b.trigger = (MPWM_HALF_PERIOD * 2) - 2U;
+  madc_seq3->madc_seq_m0_b.trigger = (MPWM_HALF_PERIOD * 2) - 2U;
+  madc_seq0->madc_seq_cmd_b.run = 1U;
+  madc_seq1->madc_seq_cmd_b.run = 1U;
+  madc_seq2->madc_seq_cmd_b.run = 1U;
+  madc_seq3->madc_seq_cmd_b.run = 1U;
 }
 
 void adc_WaitToFinish()

@@ -1,8 +1,8 @@
 /*!************************************************************************//*!
  * \file    netx_drv_uart.c
  * \brief   UART peripheral module driver.
- * $Revision: 8128 $
- * $Date: 2020-09-01 19:21:03 +0200 (Di, 01 Sep 2020) $
+ * $Revision: 9787 $
+ * $Date: 2022-02-03 17:43:03 +0100 (Do, 03 Feb 2022) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -244,7 +244,7 @@ DRV_STATUS_E DRV_UART_Init(DRV_UART_HANDLE_T * const ptDriver)
   /* set UART to 8 bits, 1 stop bit, no parity, FIFO enabled */
   ptDriver->ptDevice->uartlcr_h = (uint32_t) ptDriver->tConfiguration.eLineControl & (uint32_t) DRV_UART_LINE_CONTROL_MASK;
   ptDriver->ptDevice->uartlcr_h_b.WLEN = (ptDriver->tConfiguration.eWordLength & 3u);
-  if(ptDriver->tConfiguration.eTxFifoWatermark > 1 && ptDriver->tConfiguration.eRxFifoWatermark > 1)
+  if(ptDriver->tConfiguration.eTxFifoWatermark > 1 && ptDriver->tConfiguration.eRxFifoWatermark > 1)  /* Enable Fifo if Watermark is > 1 */
   {
     ptDriver->ptDevice->uartlcr_h_b.FEN = 1;
   }
@@ -252,6 +252,7 @@ DRV_STATUS_E DRV_UART_Init(DRV_UART_HANDLE_T * const ptDriver)
   {
     ptDriver->ptDevice->uartlcr_h_b.FEN = 0;
   }
+
   /* Set TX-Driver to enabled */
   ptDriver->ptDevice->uartdrvout = (ptDriver->tConfiguration.eTxMode ^ 0x1ul) & DRV_UART_TX_MODE_MASK;
   /* Finally enable the UART */
@@ -259,7 +260,7 @@ DRV_STATUS_E DRV_UART_Init(DRV_UART_HANDLE_T * const ptDriver)
   // Configure nvic (activate IRQ, define priority and so on)
   if(ptDriver->tConfiguration.eOperationMode == DRV_OPERATION_MODE_IRQ)
   {
-    if(ptDriver->tConfiguration.fnRxCallback != 0)
+    if(ptDriver->tConfiguration.fnRxCallback != 0)  // enable IRQ only if we have 'fnRxCallback' defined
     {
       ptDriver->ptDevice->uartcr_b.RIE = 1;
       ptDriver->ptDevice->uartcr_b.RTIE = 1;
@@ -330,11 +331,11 @@ __STATIC_INLINE void DRV_UART_Flush_Buffers(DRV_UART_HANDLE_T * const ptDriver)
     }
   }
   else
-  { // if there is no buffer defined
-    if(ptDriver->tConfiguration.fnRxCallback != 0) // but a receive callback is defined
+  { /* if there is no buffer defined */
+    if(ptDriver->tConfiguration.fnRxCallback != 0) /* but a receive callback is defined */
     {
-      ptDriver->RxBufferSize = 16;
-      while(ptDriver->ptDevice->uartfr_b.RXFE != 1u)
+      ptDriver->RxBufferSize = 16;                      /* set to DRV_UART_WATERMARK_MAX */
+      while(ptDriver->ptDevice->uartfr_b.RXFE != 1u)    /* copy into RxBufferStatic[] */
       {
         if(ptDriver->RxBufferCounter != ptDriver->RxBufferSize)
         {
@@ -977,7 +978,7 @@ __STATIC_INLINE void DRV_UART_IRQ_Inline_Handler(DRV_UART_DEVICE_ID_E const eDev
     return;
   }
 #endif
-  size_t rtis = ptDriver->ptDevice->uartiir_b.RTIS;
+  size_t rtis = ptDriver->ptDevice->uartiir_b.RTIS; /* Receive Timeout Int.Stat */
   DRV_UART_Flush_Buffers(ptDriver);
   if(ptDriver->RxBufferCounter == ptDriver->RxBufferSize)
   {

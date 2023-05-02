@@ -15,32 +15,7 @@
 /**
  * \brief Size of moving average filter.
  */
-#define PSE_CAPTURE_ARRAY_SIZE        (int32_t)4
-/**
- * \brief Electrical angle 0 degrees in digits.
- */
-#define PSE_POSITION_SECTOR_1         0u
-/**
- * \brief Electrical angle 60 degrees in digits.
- */
-#define PSE_POSITION_SECTOR_2         10922u
-/**
- * \brief Electrical angle 120 degrees in digits.
- */
-#define PSE_POSITION_SECTOR_3         21845u
-/**
- * \brief Electrical angle 180 degrees in digits.
- */
-#define PSE_POSITION_SECTOR_4         32768u
-/**
- * \brief Electrical angle 240 degrees in digits.
- */
-#define PSE_POSITION_SECTOR_5         43690u
-/**
- * \brief Electrical angle 300 degrees in digits.
- */
-#define PSE_POSITION_SECTOR_6         54613u
-
+#define PSE_CAPTURE_ARRAY_SIZE        (int32_t)3
 
 /**
  * \brief Estimated speed.
@@ -104,6 +79,18 @@ typedef enum HallSectors
 } Pse_SectorT;
 
 /**
+ * \brief Calibrated hall state boundaries.
+ */
+typedef struct HallStateBoundaries
+{
+  uint8_t  u8_HallStatesToIndex[7];
+  uint8_t  u8_CalibratedHallStates[6];
+  uint16_t u16_CalibratedBoundaries[6];
+  uint16_t u16_CalibratedMidPoints[6];
+} Pse_HallStateBoundaries_T;
+
+
+/**
  * \brief Hall state structure.
  */
 typedef struct HallState
@@ -113,34 +100,35 @@ typedef struct HallState
     uint16_t       u16_count;               /**< Number of samples taken in current state.*/
 } Pse_HallState_T;
 
-
-
-
 /*!
  * \brief     Initialize Position&Speed Estimation.
  */
 void Pse_Init();
 
-
 /*!
  * \brief         Set position manually. Used in  open-loop.
  */
 void Pse_SetPositionManually(uint16_t au16_Position);
-
-
+/*!
+ * \brief         Set speed manually. Used in  open-loop.
+ */
+void Pse_SetSpeedManually(int16_t as16_SpeedRPM);
+/*!
+ * \brief         Set calibrated hall boundaries.
+ */
+void Pse_SetHallBoundaries(uint16_t * ap_Values, uint8_t * ap_HallState);
 /*!
  * \brief     Speed estimation.
  * @return    Estimated speed struct.
  */
 Pse_Speed_T Pse_EstimateSpeed(void);
 
-#if ((PAR_USE_HALL_SPEED == 1) || (PAR_USE_HALL_SPEED == 2))
 /*!
  * \brief     Speed estimation by hall sensor.
  * @return    Estimated speed struct by hall sensor.
  */
 Pse_Speed_T Pse_EstimateSpeedHall(void);
-#endif
+
 
 /*!
  * \brief     Hybrid Position estimation.
@@ -154,5 +142,10 @@ Pse_Position_T Pse_EstimatePosition(void);
  * @return    Estimated position struct.
  */
 Pse_Position_T Pse_GetPosition(void);
+/*!
+ * \brief     Get position. Used in  open-loop.
+ * @return    Estimated position struct.
+ */
+Pse_Speed_T Pse_GetSpeed(void);
 
 #endif /* __PSE_H_ */

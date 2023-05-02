@@ -1,15 +1,86 @@
-#! /usr/bin/env python
+#!/usr/bin/env python
 # encoding: utf-8
 
 import os
 import sys
+import re
 
 import waflib.Tools.gcc
 import waflib.Tools.gxx
 
-from waflib import Options, Utils
+from waflib import Build, Context, Options, Utils
 from waflib.Configure import conf
-from waflib.TaskGen import feature
+from waflib.TaskGen import feature, before_method
+
+def options(opt):
+    opt.add_option('--custom-toolchain', action='store_true', dest='use_custom_toolchain', default=False,
+                    help=u'Use a custom toolchain for all builds')
+
+    opt.add_option('--compiler-prefix', action='store', dest='custom_toolchain_prefix', default='arm-none-eabi',
+                    help='Select a custom compiler prefix (e.g. "arm-none-eabi" [default])')
+
+    opt.add_option('--compiler-path', action='store', dest='custom_toolchain_path', default=None,
+                    help=r'Select a custom compiler path (e.g. "C:\Programme\Codesourcery\Sourcery G++ Lite\bin")')
+
+    opt.add_option('--compiler-driver', action='store', dest='custom_toolchain_driver', default='gcc',
+                    help=r'Select a custom compiler driver (e.g. "gcc" [default])')
+
+    opt.add_option('--cxxcompiler-driver', action='store', dest='custom_toolchain_cxxdriver', default='g++',
+                    help=r'Select a custom C++ compiler driver (e.g. "g++" [default])')
+
+    opt.load('asm gcc')
+
+@conf
+def get_requested_toolchains(ctx):
+    return getattr(Context.g_module, 'REQUIRED_TOOLCHAINS', ['hitex', 'codesourcery'])
+
+def configure(conf):
+    conf.setenv('')
+
+    if not conf.env['CONDITIONS']:
+        raise conf.errors.WafError(u'Must load hilscher_netx before hilscher_toolchains in %s' % conf.cur_script.abspath())
+
+    conf.env['use_custom_toolchain'] = conf.options.use_custom_toolchain
+
+    for toolchain in conf.get_requested_toolchains():
+        try:
+            find_cross_gcc(conf, toolchain)
+        except conf.errors.ConfigurationError:
+            conf.start_msg("Toolchain '" + toolchain + "'")
+            conf.end_msg("not found (Some projects may not be available for building)", 'YELLOW')
+
+    if conf.options.use_custom_toolchain or conf.options.custom_toolchain_path:
+        find_cross_gcc(conf, 'custom')
+
+@conf
+def find_cross_gcc(conf, name):
+    '''This function is only left for backwards compat'''
+    conf.configure_toolchain(name)
+
+    conf.start_msg("Toolchain '" + name + "'")
+    conf.end_msg("%s %s" %(conf.env.CC_NAME, ".".join(conf.env.CC_VERSION)))
+
+    conf.setenv(name, conf.env)
+    conf.setenv('')
+
+@feature('*')
+@before_method('propagate_uselib_vars')
+def apply_conditions(self):
+    ''' Apply build conditions '''
+
+    _vars = self.get_uselib_vars()
+    env = self.env
+
+    for var in _vars:
+        env.append_value(var, env[var + '__debug'])
+
+    for var in _vars:
+        env.append_value(var, env[var + '__optimize'])
+
+    # For legacy wscripts, set feature to include feature vars as
+    # previous. legacy scripts should be reworked at some time
+    self.features = ['compile_' + self.env.CONDITIONS] + Utils.to_list(getattr(self, 'features', []))
+
 ###############################################################################
 ###############################################################################
 # Support functions to define toolchains and devices
@@ -23,7 +94,8 @@ class toolchain(object):
 
     def __init__(self, name, *aliases):
         super(toolchain,self).__init__()
-        self.name = name
+        self.name    = name
+        self.envname = 'toolchain_%s' % self.name
 
         self.toolchains[self.name] = self
 
@@ -44,7 +116,7 @@ class toolchain(object):
         return self
 
     def configure_toolchain(self,ctx):
-        envname = 'toolchain_%s' % self.name
+        envname = self.envname
 
         if envname in ctx.all_envs:
             ctx.setenv(envname)
@@ -60,13 +132,16 @@ class toolchain(object):
                 del ctx.all_envs[envname]
                 raise
 
+    def get_env(self, ctx):
+        return ctx.all_envs[self.envname]
+
     def select_toolchain(self,ctx):
-        envname = 'toolchain_%s' % self.name
+        envname = self.envname
 
         if envname in ctx.all_envs:
             ctx.setenv(envname)
         else:
-            ctx.fatal('Toolchain %s not configured' % self.name)
+            raise ctx.errors.ConfigurationError('Toolchain %s not configured' % self.name)
 
     def target_triple_func(self, func):
         self.target_triple = func
@@ -82,6 +157,37 @@ class toolchain(object):
             if x not in toolchains:
                 toolchains[x] = orig
 
+
+    @classmethod
+    def get_toolchain_info(cls, bld, toolchain, build_id, platform):
+        if build_id:
+            bld.setup_build(build_id)
+        else:
+            if toolchain in bld.all_envs:
+                bld.setenv(toolchain)
+            elif "toolchain_" + toolchain in bld.all_envs:
+                bld.setenv("toolchain_" + toolchain)
+            else:
+                bld.fatal("Toolchain not found")
+
+        t = cls.toolchains[bld.env['TOOLCHAIN']]
+
+        return t.target_triple(bld, platform), \
+               '.'.join(bld.env['CC_VERSION'])
+
+    @classmethod
+    def get_toolchain_info_on_error(cls, bld, toolchain, platform):
+        bld.setenv('')
+
+        try:
+            t = cls.toolchains[toolchain]
+        except:
+            target_triple = 'unknown-notfound-none'
+        else:
+            target_triple = t.target_triple(bld, platform) or 'unknown-notfound-none'
+
+        return target_triple, 'x.x.x'
+
     @classmethod
     def get_name_prefix(cls, bld, toolchain = None, suffix = None, build_id = None, platform = None):
         """
@@ -91,29 +197,9 @@ class toolchain(object):
         @param suffix \b string: identification of the rcX (e.g. "rcX_V2.0", "rcX_V2.1" and so on).
         """
         try:
-            if build_id:
-                bld.setup_build(build_id)
-            else:
-                if toolchain in bld.all_envs:
-                    bld.setenv(toolchain)
-                elif "toolchain_" + toolchain in bld.all_envs:
-                    bld.setenv("toolchain_" + toolchain)
-                else:
-                    bld.fatal("Toolchain not found")
-
-            t = cls.toolchains[bld.env['TOOLCHAIN']]
-
-            target_triple = t.target_triple(bld, platform)
-            version = '.'.join(bld.env['CC_VERSION'])
+            target_triple, version = cls.get_toolchain_info(bld, toolchain, build_id, platform)
         except bld.errors.WafError:
-            try:
-                t = cls.toolchains[toolchain]
-            except:
-                target_triple = 'unknown-notfound-none'
-            else:
-                target_triple = t.target_triple(bld, platform) or 'unknown-notfound-none'
-
-            version       = 'x.x.x'
+            target_triple, version = cls.get_toolchain_info_on_error(bld, toolchain, platform)
         finally:
             bld.setenv('')
 
@@ -122,24 +208,66 @@ class toolchain(object):
 # register get_name_prefix function with configuration/build context
 conf(toolchain.get_name_prefix)
 
+def get_toolchain(name):
+    u''' Getter function to work around name clashes '''
+    global toolchain
+    return toolchain.toolchains[name]
+
 @conf
 def configure_toolchain(conf,name):
-    global toolchain
     try:
-        func = toolchain.toolchains[name]
+        func = get_toolchain(name)
     except KeyError:
         raise conf.errors.ConfigurationError('Unknown toolchain %s' % name)
 
     func(conf)
 
+def set_optimize_flags(env, conditions, **kwargs):
+    if conditions != env.CONDITIONS:
+        return
+
+    for var,value in kwargs.items():
+        if value is not None:
+            env[var.upper() + '__optimize'] = Utils.to_list(value)
+
+@conf
+def set_toolchain_optimize_flags(conf, toolchain, conditions, cflags = None, cxxflags = None, defines = None, linkflags = None):
+    u''' Set/override optimization flags for particular condition'''
+
+    if conf.cmd != 'configure':
+        conf.fatal(u'Function set_toolchain_optimize_flags() only allowed in configure()')
+
+    env = get_toolchain(toolchain).get_env(conf)
+    set_optimize_flags(env,conditions, cflags = cflags, cxxflags = cxxflags, defines=defines, linkflags=linkflags)
+
+
+@conf
+def set_target_optimize_flags(bld, name, conditions, cflags = None, cxxflags = None, defines = None, linkflags = None):
+    u''' Set/override optimization flags for particular condition'''
+
+    if not isinstance(bld,Build.BuildContext):
+        bld.fatal(u'Function set_target_optimize_flags() only allowed in build()')
+
+    try:
+        env = bld.all_envs['target_' + name]
+    except KeyError:
+        raise bld.errors.WafError(u'Environment for target \'%s\' not found. (Target not yet declared?)' % name)
+
+    set_optimize_flags(env, conditions, cflags = cflags, cxxflags = cxxflags, defines=defines, linkflags=linkflags)
+
 @conf
 def select_toolchain(ctx,name):
-    global toolchain
     try:
-        func = toolchain.toolchains[name].select_toolchain
+        func = get_toolchain(name).select_toolchain
     except KeyError:
         raise ctx.errors.ConfigurationError('Unknown toolchain %s' % name)
     func(ctx)
+
+    # Sanity check to ensure that configure command was invoked with same arguments
+    # as build command
+    if ctx.options.conditions is not None:
+        if ctx.env.CONDITIONS != ctx.options.conditions:
+            raise ctx.errors.WafError('Condition mismatch between build & configure')
 
 class device(object):
     ''' a special decorator class used to wrap common actions around
@@ -160,7 +288,11 @@ class device(object):
                 raise Exception('Unknown Toolchain %s' % x)
 
         for x in devices:
-            self.devices[x] = self
+            self.devices.setdefault((x, None), self)
+
+            for y in self.toolchains:
+                self.devices[(x, y)] = self
+
 
     def __call__(self,*args,**kwargs):
         configure_func =  getattr(self,'configure_function',None)
@@ -203,24 +335,28 @@ class device(object):
                 raise
 
 @conf
-def configure_device(conf,name,toolchain = None):
+def configure_device(conf, name, toolchain = None):
     global device
     try:
-        func = device.devices[name]
+        func = device.devices[(name, toolchain)]
     except KeyError:
         raise conf.errors.ConfigurationError('Unknown device %s' % name)
+
     func(conf,name, toolchain)
 
 @conf
-def apply_device_flags(ctx,name):
+def apply_device_flags(ctx, name, toolchain):
     '''Function to update the current environment with device
        specific flags. This function is meant for backwards compat'''
     global device
 
     try:
-        func = device.devices[name]
+        func = device.devices[(name, toolchain)]
     except KeyError:
         raise ctx.errors.ConfigurationError('Unknown device %s' % name)
+
+    if toolchain not in func.toolchains:
+        raise ctx.errors.ConfigurationError('Invalid toolchain %r for device %r in %r' % (toolchain,name,ctx.cur_script.path_from(ctx.root)))
 
     func.configure_function(ctx)
     ctx.env.append_value('DEFINES', '__' + name.upper())
@@ -243,6 +379,19 @@ def setup_gnu_binutils(conf, path_list = None):
         conf.find_program(executable_name, var=tool.upper(), path_list=path_list)
 
     env.ARFLAGS = 'rcs'
+
+
+@conf
+def gcc_optimize_flags(conf):
+    f = conf.env.append_value
+
+    if conf.env.CONDITIONS == 'debug':
+        f('CFLAGS__optimize',   ['-O0'])
+        f('CXXFLAGS__optimize', ['-O0'])
+    else:
+        f('CFLAGS__optimize',   ['-Os'])
+        f('CXXFLAGS__optimize', ['-Os'])
+        f('DEFINES__optimize',  ['NDEBUG=1'])
 
 @conf
 def setup_gnu_gcc_toolchain(conf, prefix, compiler = None, cxxcompiler = None, path_list=None):
@@ -364,16 +513,6 @@ def setup_llvm_toolchain(conf, target, path_list=None):
         raise
 
 @conf
-def cc_common_flags(conf):
-    u'''Common flags when compiling c code '''
-    f = conf.env.append_value
-
-    # disable assert macros in release mode
-    f('DEFINES_compile_release',  ['NDEBUG'])
-    f('DEFINES_compile_debugrel', ['NDEBUG'])
-
-
-@conf
 def clang_common_flags(conf):
     """
     Common flags for g++ on nearly all platforms
@@ -437,6 +576,7 @@ def configure_toolchain_hitex(conf):
 
     conf.setup_gnu_gcc_toolchain(prefix = 'arm-hitex-elf-', path_list = path)
     conf.gcc_arm_flags()
+    conf.gcc_optimize_flags()
 
 @configure_toolchain_hitex.target_triple_func
 def target_triple_toolchain_hitex(bld, platform):
@@ -493,6 +633,7 @@ def configure_toolchain_codesourcery(conf):
 
     conf.setup_gnu_gcc_toolchain(prefix = 'arm-none-eabi-', path_list=path)
     conf.gcc_arm_flags()
+    conf.gcc_optimize_flags()
 
     f = conf.env.append_value
 
@@ -523,6 +664,7 @@ def configure_toolchain_gccarmemb(conf):
     if path:
         conf.setup_gnu_gcc_toolchain(prefix = 'arm-none-eabi-', path_list = path)
         conf.gcc_arm_flags()
+        conf.gcc_optimize_flags()
 
         f = conf.env.append_value
 
@@ -544,20 +686,77 @@ def target_triple_toolchain_gccarmemb(bld, platform):
     if platform:
         try:
             return {
-                'netx'     : 'arm-none-eabi',
-                'netx10'   : 'arm-none-eabi',
-                'netx50'   : 'arm-none-eabi',
-                'netx51'   : 'arm-none-eabi',
-                'netx52'   : 'arm-none-eabi',
-                'netx90'   : 'armv7em-none-eabi',
-                'netx100'  : 'arm-none-eabi',
-                'netx500'  : 'arm-none-eabi',
-                'netx4000' : 'armv7r-none-eabi',
+                'netx'              : 'arm-none-eabi',
+                'netx10'            : 'arm-none-eabi',
+                'netx50'            : 'arm-none-eabi',
+                'netx51'            : 'arm-none-eabi',
+                'netx52'            : 'arm-none-eabi',
+                'netx90'            : 'armv7em-none-eabi',
+                'netx90_app'        : 'armv7em-none-eabi',
+                'netx90_app_softfp' : 'armv7em-none-eabi',
+                'netx90_app_hardfp' : 'armv7em-none-eabihf',
+                'netx100'           : 'arm-none-eabi',
+                'netx500'           : 'arm-none-eabi',
+                'netx4000'          : 'armv7r-none-eabi',
             }[platform]
         except KeyError:
             bld.fatal('GCC ARM Embedded toolchain does not support platform "%s"'% platform)
     else:
         bld.fatal('GCC ARM Embedded toolchain requires "platform" argument for function get_name_prefix()')
+
+
+match_ecoscentric_version = re.compile(r'.* release (?P<version>[0-9a-z]+\.[0-9a-z]+\.[0-9a-z]+)\W').match
+
+@toolchain('ecoscentric')
+def configure_toolchain_ecoscentric(conf):
+    # get path to toolchain
+    path = os.environ.get('PATH_GCC_ARM_ECOSCENTRIC', None)
+
+    if path:
+        conf.setup_gnu_gcc_toolchain(prefix = 'arm-eabi-', path_list = [ path + os.sep + 'bin'])
+        conf.gcc_arm_flags()
+        conf.gcc_optimize_flags()
+
+        f = conf.env.append_value
+
+        f('LINKFLAGS', ['-Wl,-n', # Disable alignment by default
+                        '-Wl,-gc-sections'
+        ])
+
+        #f('CFLAGS_enable_gc_sections',    ['-ffunction-sections', '-fdata-sections'])
+        #f('CXXFLAGS_enable_gc_sections',  ['-ffunction-sections', '-fdata-sections'])
+
+        f('CFLAGS_disable_unaligned_access',   ['-mno-unaligned-access'])
+        f('CXXFLAGS_disable_unaligned_access', ['-mno-unaligned-access'])
+
+        try:
+            readme_node = conf.root.find_resource(path + os.sep + 'README.txt')
+            content = readme_node.read()
+
+            first_line = content.splitlines()[0]
+            m = match_ecoscentric_version(first_line)
+            conf.env['CC_VERSION'] = m.group('version').split('.')
+        except Exception as e:
+            conf.fatal(u'Unable to determine eCosCentric toolchain version: %s' % (str(e)))
+    else:
+        conf.fatal('PATH_GCC_ARM_ECOSCENTRIC environment variable must be set to enable eCosCentric toolchain')
+
+@configure_toolchain_ecoscentric.target_triple_func
+def target_triple_toolchain_ecoscentric(bld, platform):
+    if isinstance(platform, str):
+        platform = platform.lower()
+
+    if platform:
+        try:
+            return {
+                'netx90'            : 'armv7em-ecoscentric-ecospro-eabi',
+                'netx4000'          : 'armv7r-ecoscentric-ecospro-eabi',
+            }[platform]
+        except KeyError:
+            bld.fatal('GCC ARM Embedded toolchain does not support platform "%s"'% platform)
+    else:
+        bld.fatal('eCosCentric ARM toolchain requires "platform" argument for function get_name_prefix()')
+
 
 @toolchain('custom')
 def configure_toolchain_custom(conf):
@@ -571,6 +770,7 @@ def configure_toolchain_custom(conf):
     )
 
     conf.gcc_arm_flags()
+    conf.gcc_optimize_flags()
 
     f = conf.env.append_value
 
@@ -595,6 +795,7 @@ def configure_toolchain_arm_eabi(conf):
         raise exc
 
     conf.gcc_arm_flags()
+    conf.gcc_optimize_flags()
 
     f = conf.env.append_value
 
@@ -630,6 +831,22 @@ def get_xpic_llvm_version(conf, path_list=None):
 
     return version
 
+@conf
+def xpic_optimize_flags(conf):
+    f = conf.env.append_value
+
+    if conf.env.CONDITIONS == 'debug':
+        f('CFLAGS__optimize',   ['-O0'])
+        f('CXXFLAGS__optimize', ['-O0'])
+    else:
+        f('CFLAGS__optimize',   ['-Os'])
+        f('CXXFLAGS__optimize', ['-Os'])
+        f('DEFINES__optimize',  ['NDEBUG=1'])
+
+    if conf.env.CONDITIONS != 'release':
+        f('CFLAGS__debug',   ['-g', '-gdwarf-4'])
+        f('CXXFLAGS__debug', ['-g', '-gdwarf-4'])
+
 @toolchain('llvm-xpic', 'llvm_xpic')
 def configure_toolchain_xpic(conf):
     path = None
@@ -657,10 +874,7 @@ def configure_toolchain_xpic(conf):
 
     f('DEFINES', ['__XPIC__'])
 
-    for x in 'CFLAGS CXXFLAGS'.split():
-        f(x + '_compile_debug',    ['-O0', '-g', '-gdwarf-4'])
-        f(x + '_compile_debugrel', ['-Os', '-g', '-gdwarf-4'])
-        f(x + '_compile_release',  ['-Os'])
+    conf.xpic_optimize_flags()
 
     # fix wrong directories in xpic compiler
     libdir_list = conf.cmd_and_log(conf.env['LLVM_CONFIG'] + ["--libdir"]).splitlines()
@@ -685,6 +899,7 @@ def configure_toolchain_llvm_arm(conf):
     conf.setup_llvm_toolchain(target='arm-none-eabi', path_list=path)
 
     conf.gcc_arm_flags()
+    conf.gcc_optimize_flags()
 
     f = conf.env.append_value
 
@@ -696,6 +911,7 @@ def target_triple_toolchain_llvm_arm(bld, target):
 def configure_toolchain_gcc_linux(conf):
     if sys.platform in ("linux","linux2"):
         conf.setup_gnu_gcc_toolchain(prefix='')
+        conf.gcc_optimize_flags()
         conf.env.append_value('LINKFLAGS', ['-Wl,-gc-sections'])
     else:
         conf.fatal('GCC Linux toolchain not available none linux os')
@@ -708,6 +924,7 @@ def target_triple_toolchain_gcc_linux(bld, platform):
 def configure_toolchain_mingw32(conf):
     if sys.platform in ("win32","win64"):
         conf.setup_gnu_gcc_toolchain(prefix = 'mingw32-')
+        conf.gcc_optimize_flags()
 
         conf.env['DEST_OS'] = 'win32'
         conf.gcc_modifier_platform()
@@ -723,6 +940,7 @@ def target_triple_toolchain_mingw32(bld, platform):
 def configure_toolchain_mingw64(conf):
     if sys.platform in ("win64"):
         conf.setup_gnu_gcc_toolchain(prefix = 'mingw64')
+        conf.gcc_optimize_flags()
 
         conf.env['DEST_OS'] = 'win32'
         conf.gcc_modifier_platform()
@@ -736,9 +954,9 @@ def target_triple_toolchain_mingw64(bld, platform):
 
 # Lets define some common aliases
 if sys.platform in ("linux","linux2"):
-    toolchain.alias('gcc-linux', ['linux', 'posix', 'native'])
+    toolchain.alias('gcc-linux', ['linux', 'posix', 'native', 'gcc'])
 elif sys.platform in ("win32"):
-    toolchain.alias('mingw32', ['win', 'native'])
+    toolchain.alias('mingw32', ['win', 'native','gcc'])
 
     @toolchain('posix')
     def configure_toolchain_unavail(conf):
@@ -761,7 +979,10 @@ elif sys.platform in ('win64'):
 
 @conf
 def cc_version(conf):
-    return tuple(int(x) for x in conf.env['CC_VERSION'])
+    a,b,c = conf.env['CC_VERSION'] or ('0', '0', '0')
+
+    c = c.rstrip('abcdefghijklmnopqrstuvwxyz')
+    return (int(a), int(b), int(c))
 
 @conf
 def gcc_flags(conf):
@@ -822,20 +1043,17 @@ def gcc_arm_flags(conf):
     conf.env['cprogram_PATTERN']   = '%s.elf'
     conf.env['cxxprogram_PATTERN'] = '%s.elf'
 
+    # we prefer gdwarf-2 output for use with lauterbach t32
+    if conf.get_conditions() != 'release':
+        f('CFLAGS__debug',   ['-g', '-gdwarf-2'])
+        f('CXXFLAGS__debug', ['-g', '-gdwarf-2'])
+        f('ASFLAGS__debug',  ['-Wa,-gdwarf2'])
 
 @conf
 def gcc_netx_flags(conf):
     conf.gcc_flags()
 
     f = conf.env.append_value
-
-    for x in 'CFLAGS CXXFLAGS'.split():
-        f(x + '_compile_debug',    ['-O0', '-g', '-gdwarf-2'])
-        f(x + '_compile_debugrel', ['-Os', '-g', '-gdwarf-2'])
-        f(x + '_compile_release',  ['-Os'])
-
-    f('ASFLAGS_compile_debug',    ['-Wa,-gdwarf2'])
-    f('ASFLAGS_compile_debugrel', ['-Wa,-gdwarf2'])
 
     for x in 'CFLAGS CXXFLAGS'.split():
         f(x,[ '-mlong-calls',
@@ -862,7 +1080,9 @@ def configure_device_netx(conf):
 
     for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
         conf.env.append_value(x, ['-march=armv5te'])
-        conf.env.append_value(x, ['-msoft-float', '-mfpu=vfp', '-mfloat-abi=soft'])
+        if conf.env.TOOLCHAIN != 'hitex':
+            # hitex does not fully support this
+            conf.env.append_value(x, ['-msoft-float', '-mfpu=vfp', '-mfloat-abi=soft'])
 
 @device('netx50','hitex codesourcery arm-eabi gccarmemb')
 def configure_device_netx50(conf):
@@ -885,7 +1105,9 @@ def configure_device_netx50(conf):
         conf.env.append_value('LINKFLAGS', mcpu)
 
     for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
-        conf.env.append_value(x, ['-msoft-float', '-mfpu=vfp', '-mfloat-abi=soft'])
+        if conf.env.TOOLCHAIN != 'hitex':
+            # hitex does not fully support this
+            conf.env.append_value(x, ['-msoft-float', '-mfpu=vfp', '-mfloat-abi=soft'])
 
 @device('netx10 netx51 netx52','codesourcery arm-eabi gccarmemb')
 def configure_device_netx51(conf):
@@ -916,25 +1138,20 @@ def configure_device_netx100(conf):
 
     for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
         conf.env.append_value(x, '-mcpu=arm926ej-s')
-        conf.env.append_value(x, ['-msoft-float', '-mfpu=vfp', '-mfloat-abi=soft'])
+        if conf.env.TOOLCHAIN != 'hitex':
+            # hitex does not fully support this
+            conf.env.append_value(x, ['-msoft-float', '-mfpu=vfp', '-mfloat-abi=soft'])
 
-@device('netx4000','gccarmemb')
+@device('netx4000','gccarmemb ecoscentric')
 def configure_device_netx4000(conf):
     conf.gcc_flags()
 
     f = conf.env.append_value
 
-    f('ASFLAGS_compile_debug',    ['-Wa,-gdwarf2'])
-    f('ASFLAGS_compile_debugrel', ['-Wa,-gdwarf2'])
-
     for x in 'CFLAGS CXXFLAGS'.split():
         f(x,[ '-mlong-calls',
               '-mapcs',
               '-fno-common',])
-
-        f(x + '_compile_debug',    ['-O0', '-g', '-gdwarf-2'])
-        f(x + '_compile_debugrel', ['-Os', '-g', '-gdwarf-2'])
-        f(x + '_compile_release',  ['-Os'])
 
     f('ASFLAGS',[ '-mapcs',
                   '-c'])
@@ -963,8 +1180,7 @@ def configure_device_netx4000(conf):
         # option. Ether choose the softfp or this, not both
         #f(x, ['-mfpu=vfpv3-d16', '-mfloat-abi=hard'])
 
-@device('netx90','gccarmemb')
-def configure_device_netx90(conf):
+def configure_device_armv7em(conf):
     conf.gcc_flags()
 
     # Cortex-M4 onyl implements Thumb-2 instruction encoding but
@@ -978,18 +1194,11 @@ def configure_device_netx90(conf):
 
     f = conf.env.append_value
 
-    f('ASFLAGS_compile_debug',    ['-Wa,-gdwarf2'])
-    f('ASFLAGS_compile_debugrel', ['-Wa,-gdwarf2'])
-
     for x in 'CFLAGS CXXFLAGS'.split():
         f(x,[ '-mlong-calls',
               '-mapcs',
               '-fno-common',
               '-mthumb'])
-
-        f(x + '_compile_debug',    ['-O0', '-g', '-gdwarf-2'])
-        f(x + '_compile_debugrel', ['-Os', '-g', '-gdwarf-2'])
-        f(x + '_compile_release',  ['-Os'])
 
     f('ASFLAGS',[ '-mapcs',
                   '-c',
@@ -1009,17 +1218,41 @@ def configure_device_netx90(conf):
         # see WAF-132 for details
         f(x, ['-march=armv7e-m'])
 
+
+@device('netx90','gccarmemb ecoscentric')
+def configure_device_netx90(conf):
+    configure_device_armv7em(conf)
+
+    f = conf.env.append_value
+    for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
         # software floating point
         f(x, ['-mfloat-abi=soft'])
 
-        # hardware floating point with soft floating point api
-        #f(x, ['-mfpu=fpv4-sp-d16', '-mfloat-abi=softfp'])
 
-        # support hardware floating point with floating point calling convention
-        # (fpu registers will be used to pass arguments)
-        # WARNING: this produces incompatible code with above
-        # option. Ether choose the softfp or this, not both
-        #f(x, ['-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'])
+@device('netx90_app','gccarmemb')
+def configure_device_netx90(conf):
+    configure_device_armv7em(conf)
+
+    f = conf.env.append_value
+    for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
+        # software floating point
+        f(x, ['-mfloat-abi=soft'])
+
+@device('netx90_app_softfp','gccarmemb')
+def configure_device_netx90(conf):
+    configure_device_armv7em(conf)
+
+    f = conf.env.append_value
+    for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
+        f(x, ['-mfpu=fpv4-sp-d16', '-mfloat-abi=softfp'])
+
+@device('netx90_app_hardfp','gccarmemb')
+def configure_device_netx90(conf):
+    configure_device_armv7em(conf)
+
+    f = conf.env.append_value
+    for x in 'CFLAGS CXXFLAGS ASFLAGS LINKFLAGS'.split():
+        f(x, ['-mfpu=fpv4-sp-d16', '-mfloat-abi=hard'])
 
 
 @device('xpic','llvm-xpic')
@@ -1044,16 +1277,29 @@ def configure_device_xpic2(conf):
     conf.env['cprogram_PATTERN']   = '%s.elf'
     conf.env['cxxprogram_PATTERN'] = '%s.elf'
 
+@conf
+def host_optimize_flags(conf):
+    f = conf.env.append_value
+
+    if conf.env.CONDITIONS == 'debug':
+        f('CFLAGS__optimize',   ['-O0'])
+        f('CXXFLAGS__optimize', ['-O0'])
+    else:
+        f('CFLAGS__optimize',   ['-O3'])
+        f('CXXFLAGS__optimize', ['-O3'])
+        f('DEFINES__optimize',  ['NDEBUG=1'])
+
+    if conf.env.CONDITIONS != 'release':
+        f('CFLAGS__debug',   ['-g'])
+        f('CXXFLAGS__debug', ['-g'])
+        f('ASFLAGS__debug',  [-'Wa,-g'])
+
 @device('linux', 'gcc-linux')
 def configure_device_linux(conf):
     conf.gcc_flags()
+    conf.host_optimize_flags()
 
     f = conf.env.append_value
-
-    for x in 'CFLAGS CXXFLAGS'.split():
-        f(x + '_compile_debug',    ['-O0', '-g'])
-        f(x + '_compile_debugrel', ['-O3', '-g'])
-        f(x + '_compile_release', ['-O3'])
 
     f('STLIB',   ['m', 'c', 'gcc'])
     f('TOOL_OPTIONS', ["linkerscript_optional"])
@@ -1061,45 +1307,25 @@ def configure_device_linux(conf):
 @device('win32', 'mingw32')
 def configure_device_win32(conf):
     conf.gcc_flags()
+    conf.host_optimize_flags()
 
     f = conf.env.append_value
 
-    for x in 'CFLAGS CXXFLAGS'.split():
-        f(x + '_compile_debug',    ['-O0', '-g',])
-        f(x + '_compile_debugrel', ['-O3', '-g',])
-        f(x + '_compile_release',  ['-O3'])
-
-    f('ASFLAGS_compile_debug',    ['-Wa,-g'])
-    f('ASFLAGS_compile_debugrel', ['-Wa,-g'])
     f('TOOL_OPTIONS', ["linkerscript_optional"])
 
 @device('win64', 'mingw64')
 def configure_device_win64(conf):
     conf.gcc_flags()
+    conf.host_optimize_flags()
 
     f = conf.env.append_value
-
-    for x in 'CFLAGS CXXFLAGS'.split():
-        f(x + '_compile_debug',    ['-O0', '-g',])
-        f(x + '_compile_debugrel', ['-O3', '-g',])
-        f(x + '_compile_release',  ['-O3'])
-
-    f('ASFLAGS_compile_debug',    ['-Wa,-g'])
-    f('ASFLAGS_compile_debugrel', ['-Wa,-g'])
     f('TOOL_OPTIONS', ["linkerscript_optional"])
 
 @device('native', 'native')
 def configure_device_native(conf):
     conf.gcc_flags()
+    conf.host_optimize_flags()
 
     f = conf.env.append_value
-
-    for x in 'CFLAGS CXXFLAGS'.split():
-        f(x + '_compile_debug',    ['-O0', '-g',])
-        f(x + '_compile_debugrel', ['-O3', '-g',])
-        f(x + '_compile_release',  ['-O3'])
-
-    f('ASFLAGS_compile_debug',    ['-Wa,-g'])
-    f('ASFLAGS_compile_debugrel', ['-Wa,-g'])
     f('TOOL_OPTIONS', ["linkerscript_optional"])
 

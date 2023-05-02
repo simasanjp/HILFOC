@@ -41,6 +41,11 @@ def configure(conf):
     except:            
         conf.load("hilscher_netx hilscher_firmware hilscher_extras")
         print("Loaded WAF configuration from netX Studio.")
+    
+    conf.setenv("")
+    conf.env["UsedToolchain"] = "gccarmemb"
+    conf.env["UsedPlatform"]  = "netx90_app_hardfp"
+    
     sys.stdout.flush()
     conf.autorecurse(mandatory = False)
 

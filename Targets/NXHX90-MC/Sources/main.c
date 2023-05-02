@@ -45,7 +45,7 @@ int main(void)
   printf("netX90 Field-Oriented Motor Control\r\n");
   printf("%s %s\r\n",__DATE__,__TIME__);
 
-  if(FOC_APPL_init(&tData.tFOC_APPLData))
+  if(FOC_APPL_init())
   {
     printf("FOC_APPL initialization error\r\n");
   }

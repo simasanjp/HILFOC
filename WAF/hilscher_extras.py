@@ -648,7 +648,7 @@ def generatewscript(bld, target, use, *k, **kw):
     try:
         tgen = bld.get_tgen_by_name(name)
     except bld.errors.WafError:
-        tgen = bld(features="genwscript", hidden_from_list = True, **kw)
+        tgen = bld(features="genwscript", hidden_from_list = "Internal", **kw)
         tgen.use      = {}
         tgen.wscripts = []
 
@@ -819,7 +819,7 @@ def svn_export(bld, target, svn_url, *k, **kw):
     # get target node
     n = bld.srcnode.find_node(target)
     if n:
-      bld(features="svnexport", target = n, svn_url= svn_url, hidden_from_list = True, **kw)
+      bld(features="svnexport", target = n, svn_url= svn_url, hidden_from_list = "Internal", **kw)
     else:
       Logs.pprint('YELLOW',"warning: can't create or find target directory \'%s\'." % (target) )
 

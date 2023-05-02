@@ -87,7 +87,26 @@ typedef struct
   float f_KI; /**< integral gain */
 } Math_PI_Controller_Parameter_T;
 
+/**
+ * \brief pi controller state
+ *
+ * The pi controller just contains an integral state in Q1.31 notation.
+ */
+typedef struct MATH_Fixedpt_PI_Controller_State_S {
+  int32_t s32_i_n;
+} MATH_Fixedpt_PI_Controller_State_T;
 
+/**
+ * \brief pi controller parameters
+ *
+ * \warning s32_LowerLimit must be smaller than s32_UpperLimit
+ */
+typedef struct MATH_Fixedpt_PI_Controller_ParameterS {
+  int32_t s32_LowerLimit; /**< lower limit for y and integral part in Q1.31 */
+  int32_t s32_UpperLimit; /**< upper limit for y and integral part in Q1.31 */
+  int32_t s32_KP;         /**< proportional gain in Q16.16 */
+  int32_t s32_KI;         /**< integral gain in Q16.16 */
+} MATH_Fixedpt_PI_Controller_Parameter_T;
 /**
  * \brief Float sin table.
  */
@@ -106,7 +125,30 @@ float Math_Sinf(uint16_t au16_angle);
  */
 float Math_Cosf(uint16_t au16_angle);
 
+static inline int16_t Math_s32_Convert_s16(int32_t as32_In) {
+  return ((int16_t) (as32_In >> 16));
+}
+static inline int16_t Math_s16_Convert_s32(int16_t as16_In) {
+  int32_t ls32_In;
 
+  ls32_In = as16_In;
+  return ls32_In << 16;
+}
+/**
+ * \brief absolute value of an int16_t
+ * \param as16_In input value
+ * \return absolute of the input value, |input value|
+ */
+static inline int16_t Math_s16_Abs(int16_t as16_In) {
+  int16_t ls16_Ret;
+
+  if (as16_In >= 0) {
+    ls16_Ret = as16_In;
+  } else {
+    ls16_Ret = -as16_In;
+  }
+  return ls16_Ret;
+}
 /**
  * \brief         Returns sin and cos of 16-bit angle.
  * @param[in]     au16_angle angle in uint16 scale
@@ -231,6 +273,56 @@ static inline float Math_PIController(Math_PI_Controller_State_T *aps_State, con
 
   return f_y_n;
 }
+/**
+ * \brief pi controller worker function with Q1.15 input range
+ *
+ * The function takes an input error value and returns a new control value. The parallel form of the pi controller is used.
+ * The limits are applied internally to the integral part and the control value.
+ *
+ * \warning s32_LowerLimit must be <= s32_UpperLimit
+ * \warning The product of the input range and the gain is limited to 31 bit in the integer domain. It silently overflows when bigger values are processed.
+ *
+ * \param[in,out] aps_State pi controller state
+ * \param[in]     as_Parameter pi controller parameter
+ * \param[in]     as16_Error difference between set point and measurement in Q1.15
+ * \return        updated control value in Q1.15
+ */
+static inline int16_t MATH_Fixedpt_PI_Controller(MATH_Fixedpt_PI_Controller_State_T *aps_State,
+                                                const MATH_Fixedpt_PI_Controller_Parameter_T *as_Parameter,
+                                                int16_t as16_Error) {
+  int32_t ls32_ErrorKp;
+  int32_t ls32_ErrorKi;
+  int32_t ls32_y_n;
+  int32_t ls32_UpperLimit;
+  int32_t ls32_LowerLimit;
+  int32_t ls32_i_n;
+
+  ls32_ErrorKp = as_Parameter->s32_KP * ((int32_t) as16_Error);
+  ls32_ErrorKi = as_Parameter->s32_KI * ((int32_t) as16_Error);
+
+  ls32_i_n = aps_State->s32_i_n + ls32_ErrorKi;
+  ls32_y_n = ls32_i_n + ls32_ErrorKp;
+
+  ls32_UpperLimit = as_Parameter->s32_UpperLimit;
+  if (ls32_i_n > ls32_UpperLimit) {
+    ls32_i_n = ls32_UpperLimit;
+  }
+  if (ls32_y_n > ls32_UpperLimit) {
+    ls32_y_n = ls32_UpperLimit;
+  }
+
+  ls32_LowerLimit = as_Parameter->s32_LowerLimit;
+  if (ls32_i_n < ls32_LowerLimit) {
+    ls32_i_n = ls32_LowerLimit;
+  }
+
+  if (ls32_y_n < ls32_LowerLimit) {
+    ls32_y_n = ls32_LowerLimit;
+  }
+
+  aps_State->s32_i_n = ls32_i_n;
+  return Math_s32_Convert_s16(ls32_y_n);
+}
 
 /**
  * \brief         Space vector modulation.
@@ -302,23 +394,59 @@ static inline float Math_Sqrt(float af_Square, float af_Guess, uint8_t au8_it)
  * \brief         Median filter with 3 elements.
  * @param[in]     *ap_Values      Pointer to array of values.
  */
-static inline uint32_t Math_MedianFilter(uint32_t *ap_Values)
+static inline int32_t Math_MedianFilter(int32_t *ap_Values)
 {
-  uint32_t lu32_Middle = 0;
+  int32_t ls32_Middle = 0;
 
   if((ap_Values[0] <= ap_Values[1]) && (ap_Values[0] <= ap_Values[2]))
   {
-    lu32_Middle = (ap_Values[1] <= ap_Values[2]) ? ap_Values[1] : ap_Values[2];
+    ls32_Middle = (ap_Values[1] <= ap_Values[2]) ? ap_Values[1] : ap_Values[2];
   }
   else if((ap_Values[1] <= ap_Values[0]) && (ap_Values[1] <= ap_Values[2]))
   {
-    lu32_Middle = (ap_Values[0] <= ap_Values[2]) ? ap_Values[0] : ap_Values[2];
+    ls32_Middle = (ap_Values[0] <= ap_Values[2]) ? ap_Values[0] : ap_Values[2];
   }
   else
   {
-    lu32_Middle = (ap_Values[0] <= ap_Values[1]) ? ap_Values[0] : ap_Values[1];
+    ls32_Middle = (ap_Values[0] <= ap_Values[1]) ? ap_Values[0] : ap_Values[1];
   }
 
-  return lu32_Middle;
+  return ls32_Middle;
+}
+
+static inline void MATH_LowPassFilter_Init(int32_t *aps32_FilterState, int16_t as16_RawValue) {
+  *aps32_FilterState = ((int32_t) as16_RawValue) << 16;
+}
+
+static inline int16_t MATH_LowPassFilter(int32_t *aps32_FilterState, int16_t as16_RawValue,
+                                             uint16_t au16_FilterFactor) {
+  (*aps32_FilterState) += (int32_t) (((int32_t) (as16_RawValue - Math_s32_Convert_s16(*aps32_FilterState))) *
+      (int32_t) (au16_FilterFactor));
+  return Math_s32_Convert_s16(*aps32_FilterState);
+}
+/**
+ * \brief         Check if given values within the given bounds
+ * @param[in]     au16_Value1, au16_Value2, au16_Limit
+ */
+static inline int8_t Math_QuasyEqual(uint16_t au16_Value1, uint16_t au16_Value2, uint16_t au16_Limit)
+{
+  int8_t ls8_Return = 0;
+
+  if (au16_Value1 > au16_Value2){
+    if((au16_Value1 - au16_Value2) < au16_Limit){
+      ls8_Return = 1;
+    }
+  }
+  else if (au16_Value2 > au16_Value1){
+    if((au16_Value2 - au16_Value1) < au16_Limit){
+      ls8_Return = 1;
+    }
+  }
+  else
+  {
+    ls8_Return = 1;
+  }
+
+  return ls8_Return;
 }
 #endif /* #ifndef __MATH_H_ */

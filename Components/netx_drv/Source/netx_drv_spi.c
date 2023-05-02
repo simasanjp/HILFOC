@@ -1,8 +1,8 @@
 /*!************************************************************************//*!
  * \file     netx_drv_spi.c
  * \brief    SPI peripheral module driver.
- * $Revision: 8341 $
- * $Date: 2020-11-06 17:49:28 +0100 (Fr, 06 Nov 2020) $
+ * $Revision: 9790 $
+ * $Date: 2022-02-08 19:00:58 +0100 (Di, 08 Feb 2022) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -166,6 +166,7 @@ static void DRV_SPI_Flush_DMA_Callback_Tx(void * ptDriverHandle, DRV_SPI_HANDLE_
  */
 DRV_STATUS_E DRV_SPI_Init(DRV_SPI_HANDLE_T * const ptDriver)
 {
+  DRV_DMAC_TRANSFER_WIDTH_E dma_width = DRV_DMAC_TRANSFER_WIDTH_8b;
   if(ptDriver == 0)
   {
     return DRV_ERROR_PARAM;
@@ -287,10 +288,13 @@ DRV_STATUS_E DRV_SPI_Init(DRV_SPI_HANDLE_T * const ptDriver)
     ptDriver->ptDevice.ptSQI->sqi_dmacr_b.rx_dma_en = 1;
     ptDriver->ptDevice.ptSQI->sqi_dmacr_b.tx_dma_en = 1;
 
-    DRV_DMAC_TRANSFER_WIDTH_E width = DRV_DMAC_TRANSFER_WIDTH_8b;
     if(ptDriver->tConfiguration.eDataSize > DRV_SPI_DATA_SIZE_SELECT_8b)
     {
-      width = DRV_DMAC_TRANSFER_WIDTH_16b;
+      dma_width = DRV_DMAC_TRANSFER_WIDTH_16b;
+    }
+    if (ptDriver->tConfiguration.eSPIDeviceID >= DRV_SPI_DEVICE_ID_SQI_BORDER && ptDriver->tConfiguration.eSPIDeviceID < DRV_SPI_DEVICE_ID_QSPI_BORDER)
+    {
+      dma_width = DRV_DMAC_TRANSFER_WIDTH_32b;     /* for QSPI-Mode, we must specify this */
     }
 
     ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eDeviceID = ptDriver->tConfiguration.eDMARx;
@@ -300,8 +304,8 @@ DRV_STATUS_E DRV_SPI_Init(DRV_SPI_HANDLE_T * const ptDriver)
     ptDriver->tConfiguration.ptSequencerRx->tConfiguration.ePeripheralDest = DRV_DMAC_PERIPHERAL_MEMORY;
     ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eIncrementationSource = DRV_DMAC_INCREMENTATION_INACTIVE;
     ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eIncrementationDest = DRV_DMAC_INCREMENTATION_ACTIVE;
-    ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eTransferWidthSource = width;
-    ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eTransferWidthDest = width;
+    ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eTransferWidthSource = dma_width;
+    ptDriver->tConfiguration.ptSequencerRx->tConfiguration.eTransferWidthDest = dma_width;
     ptDriver->tConfiguration.ptSequencerRx->tConfiguration.fCallbackComplete = (DRV_CALLBACK_F) DRV_SPI_Flush_DMA_Callback_Rx;
     ptDriver->tConfiguration.ptSequencerRx->tConfiguration.ptCallbackHandleComplete = ptDriver;
 
@@ -312,8 +316,8 @@ DRV_STATUS_E DRV_SPI_Init(DRV_SPI_HANDLE_T * const ptDriver)
         + 1u);
     ptDriver->tConfiguration.ptSequencerTx->tConfiguration.eIncrementationSource = DRV_DMAC_INCREMENTATION_ACTIVE;
     ptDriver->tConfiguration.ptSequencerTx->tConfiguration.eIncrementationDest = DRV_DMAC_INCREMENTATION_INACTIVE;
-    ptDriver->tConfiguration.ptSequencerTx->tConfiguration.eTransferWidthSource = width;
-    ptDriver->tConfiguration.ptSequencerTx->tConfiguration.eTransferWidthDest = width;
+    ptDriver->tConfiguration.ptSequencerTx->tConfiguration.eTransferWidthSource = dma_width;
+    ptDriver->tConfiguration.ptSequencerTx->tConfiguration.eTransferWidthDest = dma_width;
     ptDriver->tConfiguration.ptSequencerTx->tConfiguration.fCallbackComplete = (DRV_CALLBACK_F) DRV_SPI_Flush_DMA_Callback_Tx;
     ptDriver->tConfiguration.ptSequencerTx->tConfiguration.ptCallbackHandleComplete = ptDriver;
 

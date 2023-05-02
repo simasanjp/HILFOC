@@ -6,7 +6,7 @@
  */
 #ifndef FIRMWARE_NETX90_PAR_DEF_H
 #define FIRMWARE_NETX90_PAR_DEF_H
-
+#define DEMO_USE_POTENTIOMETER
 /*!
  * \brief   Slope of Pot reading vs Speed request
  */
@@ -40,7 +40,7 @@
 /*!
  * \brief Maximum speed request.
  */
-#define PAR_MAX_SPEED_RPM                   (7000U)
+#define PAR_MAX_SPEED_RPM                   (4000U)
 /*!
  * \brief Number of measurements to calculate average current offset.
  */
@@ -68,7 +68,7 @@
 /*!
  * \brief DC-bus Voltage gain value, calculated from voltage divider.
  */
-#define PAR_DCBUS_VOLTAGE_GAIN              ((2.88f + 82.0f) / 2.88f)
+#define PAR_DCBUS_VOLTAGE_GAIN              ((4.99f + 82.0f) / 4.99f)
 /*!
  * \brief DC-bus Voltage offset value, experimentally determined.
  */
@@ -114,25 +114,25 @@
 /*!
  * \brief Proportional gain of speed controller.
  */
-#define PAR_SPEED_CONTROLLER_KP             (0.00005f)
+#define PAR_SPEED_CONTROLLER_KP             (0.0002f)
 /*!
  * \brief Integral gain of speed controller.
  */
-#define PAR_SPEED_CONTROLLER_KI             (0.0000005f)
+#define PAR_SPEED_CONTROLLER_KI             (0.000002f)
 /*!
  * \brief  Proportional gain of field-weakening controller.
  */
-#define PAR_FIELDWEAK_CONTROLLER_KP         (0.2f)
+#define PAR_FIELDWEAK_CONTROLLER_KP         (0.0f)
 /*!
  * \brief Integral gain of field-weakening controller.
  */
-#define PAR_FIELDWEAK_CONTROLLER_KI         (0.02f)
+#define PAR_FIELDWEAK_CONTROLLER_KI         (0.2f)
 /*!
  * \brief   Threshold voltage vector magnitude to start field-weakening.
  * \details Value is less than maximum voltage vector magnitude \n
  *          to allow a transition region.
  */
-#define PAR_FIELDWEAK_START_VOLTAGE_RATIO   (1.08f)
+#define PAR_FIELDWEAK_START_VOLTAGE_RATIO   (1.1f) //5320
 /*!
  * \brief Proportional gain of current controller.
  */
@@ -142,16 +142,34 @@
  */
 #define PAR_CURRENT_CONTROLLER_KI           (0.0005f)
 /*!
- * \brief To enable open-loop for debugging set to 1.
- */
-#define PAR_USE_OPENLOOP                    (0)
-/*!
  * \brief   To calculate speed with hall sensor.
  * \details Set to 0 to estimate speed with QEI.
  *          Set to 1 to estimate speed with sampling hall states.
- *          Set to 2 to estimate speed by hall interrupts.
  */
-#define PAR_USE_HALL_SPEED                  (1)
+#define PAR_USE_HALL_SPEED                  (0)
+
+/*!
+ * \brief   Speed difference threshold to detect stall.
+ */
+#define STALL_DETECTION_SPEED_DIFFERENCE    (300)
+
+/*!
+ * \brief   Time it takes to set stall error.
+ * \details Value is in 10ms increments.
+ */
+#define STALL_DETECTION_TIME_10MS           (200)
+
+/*!
+ * \brief   Rotor speed at calibration stage.
+ * \details Slow speeds are generally more accurate.
+ */
+#define CALIBRATION_SAMPLING_RPM            (12)
+
+/*!
+ * \brief   Deviation  angle of hall sensor position when turning CW and CCW.
+ * \details Angle is in digits (2^16 is 360 degrees).
+ */
+#define CALIBRATION_MAX_DEVIATION_ANGLE     (4000)
 
 
 #endif //FIRMWARE_NETX90_PAR_DEF_H

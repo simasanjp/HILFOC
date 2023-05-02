@@ -1,12 +1,11 @@
 /*!************************************************************************//*!
- * \file     netx_drv_spi.c
- * \brief    GPIO peripheral module driver.
- *           This file provides firmware functions to manage the following
- *           functionalities of the General Purpose Input/Output (GPIO) peripheral:
- *            + Initialization and de-initialization functions
- *            + IO operation functions
- * $Revision: 6251 $
- * $Date: 2019-10-07 09:27:10 +0200 (Mo, 07 Okt 2019) $
+ * \file    netx_drv_adc.c
+ * \brief   ADC peripheral module driver.
+ *          This file provides firmware functions related to the netX90 ADC
+ *          e.g.DRV_ADC_Driver_Init(), DRV_ADC_Seq_Init(), DRV_ADC_Seq_Start()
+ *              DRV_ADC_Seq_GetState(), DRV_ADC_Seq_GetSample()
+ * $Revision: 9789 $
+ * $Date: 2022-02-08 17:25:42 +0100 (Di, 08 Feb 2022) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -22,29 +21,45 @@
  ******************************************************************************/
 
 #include "netx_drv.h"
-#ifdef DRV_ADC_MODULE_ENABLED
+#ifdef DRV_ADC_MODULE_ENABLED   /* NOTE: needs 'PREDEFINED = DRV_ADC_MODULE_ENABLED' in Doxygen-Config-File if not enabled */
 
 /*lint -save -e685 */
 /*lint -save -e568 */
 
-/*! \defgroup ADC ADC
+/*! \defgroup ADC_lable  ADC
  * \{
- * \brief This is the ADC driver, defined by DRV_ADC_HANDLE_T
+ * \brief The ADC driver controlls the NetX90 Analog to Digital Converter.
  *
  * \details
- * The ADC driver is used to interact with the ADC hardware component. The driver is a set of
- * convenience functions to interact with the devices registers.
+ * The ADC driver can be used to acquire digital-samples of NetX90 Analog-Signal-Inputs.
  *
- * There are severeal applications of the adc that come to mind.
- * - Get now a single value.
+ * The driver controls the NetX90-ADC-Module which consists of 4-sub-units. It provides functions for e.g.
+ * - Get an actual single value (e.g. in polling mode).
  * - Get continuous sampling to automate the sampling process.
  * - Get a set of samples one after another.
  * - Get a set of samples at the same time.
- * - and more
  *
- * As every other driver component of the package a context object has to be created first.
- * This objects configuration has to be modified for the task ahead and then the device
- * will be initialized by calling the initialize function on the context.
+ * Each ADC-sub-unit is associated with an analog input-multiplexer (MUX) for the various input-channels.
+ * Some configurable 'Sequencer-HW-Logic' is basically able to switch this MUX automatically
+ *  when multiple channels are enabled.
+ *
+ * As every other driver component of the driver-package, a context- or handle-object has to be created first.
+ * (one for the ADC-Block, and one for each Sequencer to be used)
+ * These handles can be initialized using 'DRV_ADC_INITIALIZER' and 'DRV_ADC_SEQ_INITIALIZER'
+ * but certain parameters usually need to be modified depending on application-requirements
+ * before calling the initialize functions.
+ * Note that when using 'polling mode' basically just one-channel should be active/enabled
+ * because the sequencer will provide just the 'final-result' of all active channels via 'DRV_ADC_Seq_GetSample()'.
+ *
+ * Note1: Thus most practical for applications is probably the 'DRV_OPERATION_MODE_DMA' where conversion results
+ * are stored by the Sequencer via 'memory-pointers' for each channel.
+ * This is especially the case when multiple channels shall be converted at once,
+ * because in polling- or IRQ-mode, the register used by DRV_ADC_Seq_GetSample() is updated so fast by the seq.controller
+ * such that reading it by SW is not fast enough.
+ *
+ * Note2: make sure the destination/store-memory-address for the DMA-operation is 'internal RAM'
+ * since the DMA might not reliable store data in 'external SDRAM' !
+ * \note Also check out the ADC-example-applications in 'Examples_netX90_app_drv_V.x.x.x.x' found via the Hilscher web-page.
  */
 
 /*!
@@ -179,6 +194,7 @@ DRV_STATUS_E DRV_ADC_Driver_DeInit(DRV_ADC_HANDLE_T * const ptDriver)
  * \param[in] eSequencerMask Mask of sequencers to start
  * \return  DRV_OK
  *          DRV_ERROR_PARAM
+ * \sa DRV_ADC_Seq_Start
  */
 DRV_STATUS_E DRV_ADC_Start(DRV_ADC_HANDLE_T * const ptDriver, DRV_ADC_SEQ_DEVICE_MSK_E eSequencerMask)
 {
@@ -470,7 +486,7 @@ DRV_STATUS_E DRV_ADC_Seq_Init(DRV_ADC_SEQ_HANDLE_T * const ptSequencer, DRV_ADC_
   {
     return DRV_ERROR_PARAM;
   }
-  for(ulIndexLoop = 0; ulIndexLoop < DRV_ADC_MEASUREMENTS_MAX; ulIndexLoop++)
+  for(ulIndexLoop = 0; ulIndexLoop < DRV_ADC_MEASUREMENTS_MAX; ulIndexLoop++) /* NOTE: DRV_ADC_MEASUREMENTS_MAX == 8 */
   {
     if((ptSequencer->tConfiguration.tMeasurement[ulIndexLoop].eEnable > DRV_ADC_SEQ_MEAS_ENABLE_MAX)
       || (ptSequencer->tConfiguration.tMeasurement[ulIndexLoop].eEnable < DRV_ADC_SEQ_MEAS_ENABLE_MIN))
@@ -1149,6 +1165,9 @@ __STATIC_INLINE void DRV_ACD_IRQ_Inline_Handler(DRV_ADC_SEQ_DEVICE_ID_E const eD
   ptSequencer->ptDevice->madc_seq_irq_raw = 1ul << ulIrqMasked;
 }
 
+/*!
+ * \brief Macro for automatic ADC-IRQ-Function generation.
+ */
 #define  DRV_ACD_IRQHandler_Generator(id, _) DRV_Default_IRQHandler_Function_Generator(MADC ## id ## _IRQHandler ,DRV_ACD_IRQ_Inline_Handler,DRV_ADC_SEQ_DEVICE_ID_ADC ## id)
 
 /*lint -save -e123 */

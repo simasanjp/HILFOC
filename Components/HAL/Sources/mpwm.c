@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdbool.h>
-
+#ifdef HILSCHER_CODE
 #define MPWM_SPI_DATA_BITS        0x7FF        //0000011111111111
 #define MPWM_SPI_ADDRESS_BITS     0x7800       //0111100000000000
 #define MPWM_SPI_READ_BIT         0x8000       //1000000000000000
@@ -25,6 +25,10 @@
 
 typedef uint16_t MPWM_SPI_PACKET_T;
 
+static DRV_SPI_HANDLE_T tSPIHnd;
+
+#endif
+
 /*!
  * \brief     Previously captured synch in signal.
  */
@@ -37,9 +41,6 @@ static int16_t mpwm_s16_currSynch;
  * \brief     Change in synch in signal.
  */
 static int16_t mpwm_s16_changeSynch;
-
-static DRV_SPI_HANDLE_T tSPIHnd;
-
 /*!
  * \details   Checks if the Gate Driver is Active(if PIO is high)
  */
@@ -50,18 +51,18 @@ bool mpwm_IsGDUEnabled();
  * \image   html "mpwm configuration.svg"
  */
 
-static void mpwm_SS_Set()
+void mpwm_SS_Set()
 {
-  pio_app->pio_oe_b.val |= DRV_DIO_MSK_PIO_12; /* PIO12 output enable*/
+
   pio_app->pio_out_b.val |= DRV_DIO_MSK_PIO_12; /* PIO12 set high*/
 }
 
-static void mpwm_SS_Clear()
+void mpwm_SS_Clear()
 {
-  pio_app->pio_oe_b.val &= ~(DRV_DIO_MSK_PIO_12 ); /* PIO12 output disable*/
+  //pio_app->pio_oe_b.val &= ~(DRV_DIO_MSK_PIO_12 ); /* PIO12 output disable*/
   pio_app->pio_out_b.val &= ~(DRV_DIO_MSK_PIO_12 ); /* PIO12 set LOW*/
 }
-
+#ifdef HILSCHER_CODE
 void Create_SPI_Packet(MPWM_SPI_PACKET_T* ptSPIPacket, uint8_t ubReadBit, uint8_t ubAddress, uint16_t usData)
 {
   memset(ptSPIPacket, 0, sizeof(MPWM_SPI_PACKET_T));
@@ -196,11 +197,9 @@ static void mwpm_SPI_Init()
   DRV_UNLOCK(&tSPIHnd);
   mpwm_SS_Set();
 }
-
+#endif
 void mpwm_Initialize()
 {
-
-  mpwm_DisableGDU();
   mpwm_app->mpwm_cmd = mpwm_app_mpwm_cmd_stop_Msk; /*Before setting up mpwm make sure unit is stopped. */
 
   /********************mpwm_cfg************************************************/
@@ -340,12 +339,12 @@ void mpwm_Initialize()
 //mpwm_app->mpwm_dt_b.rise_val = 5U;    /* In steps of 100ns */
   /*******************mpwm Output Config***************************************/
   /* mpwm_ocfg */
-  mpwm_app->mpwm_ocfg_b.oe5 = 1u; /* Channel 5 output enable*/
-  mpwm_app->mpwm_ocfg_b.oe4 = 1u; /* Channel 4 output enable*/
-  mpwm_app->mpwm_ocfg_b.oe3 = 1u; /* Channel 3 output enable*/
-  mpwm_app->mpwm_ocfg_b.oe2 = 1u; /* Channel 2 output enable*/
-  mpwm_app->mpwm_ocfg_b.oe1 = 1u; /* Channel 1 output enable*/
-  mpwm_app->mpwm_ocfg_b.oe0 = 1u; /* Channel 0 output enable*/
+//  mpwm_app->mpwm_ocfg_b.oe5 = 1u; /* Channel 5 output enable*/
+//  mpwm_app->mpwm_ocfg_b.oe4 = 1u; /* Channel 4 output enable*/
+//  mpwm_app->mpwm_ocfg_b.oe3 = 1u; /* Channel 3 output enable*/
+//  mpwm_app->mpwm_ocfg_b.oe2 = 1u; /* Channel 2 output enable*/
+//  mpwm_app->mpwm_ocfg_b.oe1 = 1u; /* Channel 1 output enable*/
+//  mpwm_app->mpwm_ocfg_b.oe0 = 1u; /* Channel 0 output enable*/
 
 //mpwm_app->mpwm_ocfg_b.osel5 = 1U; /* Channel 5 output selector 0: compare channel 5 direct PWM output 1: dead time generator channel 2 LS*/
 //mpwm_app->mpwm_ocfg_b.osel4 = 1U; /* 1: dead time generator channel 2 HS */
@@ -392,15 +391,19 @@ void mpwm_Initialize()
   mpwm_app->mpwm_ch5_cmp1_b.val = 0u;
 
   mpwm_app->mpwm_cmd = mpwm_app_mpwm_cmd_restart_Msk & mpwm_app_mpwm_cmd_stop_Msk; /* Writing to both will reset mpwm and it will not start*/
-
+#ifdef HILSCHER_CODE
   mwpm_SPI_Init();
+#endif
+
+  pio_app->pio_oe_b.val |= DRV_DIO_MSK_PIO_8; /* PIO8 output enable*/
+  pio_app->pio_oe_b.val |= DRV_DIO_MSK_PIO_12; /* PIO12 output enable*/
 }
 
 void mpwm_Start()
 {
 //TODO: implement some kind of check before starting the counter
   mpwm_app->mpwm_cmd = mpwm_app_mpwm_cmd_start_Msk; /* Start mpwm_cnt */
-// mpwm_EnableGDU();
+
   /************************* IRQ enable mask:*************************************/
   mpwm_app->mpwm_irq_msk_set = mpwm_app_mpwm_irq_masked_ecz_Msk;/* Event counter reaches zero event */
 //mpwm_app->mpwm_irq_msk_reset = mpwm_app_mpwm_irq_masked_bop_Msk;
@@ -483,9 +486,8 @@ void mpwm_EnableLowSide()
 void mpwm_EnableGDU()
 {
 
-  pio_app->pio_oe_b.val |= DRV_DIO_MSK_PIO_8; /* PIO8 output enable*/
   pio_app->pio_out_b.val |= DRV_DIO_MSK_PIO_8; /* PIO8 set high*/
-
+  mpwm_app->mpwm_cfg_b.eci_inv = 1u;
 }
 
 /*!
@@ -494,10 +496,34 @@ void mpwm_EnableGDU()
 void mpwm_DisableGDU()
 {
 
-  pio_app->pio_oe_b.val &= ~(DRV_DIO_MSK_PIO_8); /* PIO8 output disable*/
+  //pio_app->pio_oe_b.val &= ~(DRV_DIO_MSK_PIO_8); /* PIO8 output disable*/
   pio_app->pio_out_b.val &= ~(DRV_DIO_MSK_PIO_8); /* PIO8 set low*/
 }
+/*!
+ * \brief     Disable PWM output.
+ */
+void mpwm_DisablePWM()
+{
+  mpwm_app->mpwm_ocfg_b.oe5 = 0u; /* Channel 5 output disable*/
+  mpwm_app->mpwm_ocfg_b.oe4 = 0u; /* Channel 4 output disable*/
+  mpwm_app->mpwm_ocfg_b.oe3 = 0u; /* Channel 3 output disable*/
+  mpwm_app->mpwm_ocfg_b.oe2 = 0u; /* Channel 2 output disable*/
+  mpwm_app->mpwm_ocfg_b.oe1 = 0u; /* Channel 1 output disable*/
+  mpwm_app->mpwm_ocfg_b.oe0 = 0u; /* Channel 0 output disable*/
+}
 
+/*!
+ * \brief     Enable PWM output.
+ */
+void mpwm_EnablePWM()
+{
+  mpwm_app->mpwm_ocfg_b.oe5 = 1u; /* Channel 5 output enable*/
+  mpwm_app->mpwm_ocfg_b.oe4 = 1u; /* Channel 4 output enable*/
+  mpwm_app->mpwm_ocfg_b.oe3 = 1u; /* Channel 3 output enable*/
+  mpwm_app->mpwm_ocfg_b.oe2 = 1u; /* Channel 2 output enable*/
+  mpwm_app->mpwm_ocfg_b.oe1 = 1u; /* Channel 1 output enable*/
+  mpwm_app->mpwm_ocfg_b.oe0 = 1u; /* Channel 0 output enable*/
+}
 /*!
  * \details   Checks if the Gate Driver is Active(if PIO is high)
  */

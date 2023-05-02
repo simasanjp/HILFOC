@@ -1,8 +1,8 @@
 /*!************************************************************************//*!
  * \file    netx_drv_adc.h
  * \brief   Header file of ADC DRV module.
- * $Revision: 6124 $
- * $Date: 2019-08-28 19:41:54 +0200 (Mi, 28 Aug 2019) $
+ * $Revision: 9788 $
+ * $Date: 2022-02-04 15:39:05 +0100 (Fr, 04 Feb 2022) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -99,14 +99,14 @@ extern "C"
 /*!
  * \brief Default settings for adc device driver.
  *
- * Use this define for initialize the adc driver structure with default values.
+ * Use this define to initialize the adc-driver handle-structure with default values.
  */
 #define DRV_ADC_INITIALIZER (DRV_ADC_HANDLE_T){0, {0, 0, 0, 0}, DRV_ADC_CONFIG_DEFAULT, DRV_LOCK_INITIALIZER_VALUE}
 
 /*!
  * \brief Default settings for adc sequencer.
  *
- * Use this define for initialize the adc sequencer structure with default values.
+ * Use this define to initialize the adc-driver-sequencer handle-structure with default values.
  */
 #define DRV_ADC_SEQ_INITIALIZER (DRV_ADC_SEQ_HANDLE_T){0, 0, DRV_ADC_SEQ_CONFIG_DEFAULT, DRV_LOCK_INITIALIZER_VALUE, {0, 0, 0, 0, 0, 0}}
 
@@ -126,16 +126,32 @@ typedef enum DRV_ADC_Device_MSK_Etag
 } DRV_ADC_SEQ_DEVICE_MSK_E;
 
 /*!
- * \brief Use internal 2.6V reference:
+ * \brief Configuring the ADC-Reference-Voltage-Source
  *
- * This mode requires an external capacitor at pin ADC_VREF, which will be driven to 2.6V from internal vref_buffer.
- * To enable this mode set this bit to 1 and static_cfg-vref=0 inside the related MADC_SEQ module.
- * Use external reference:
- * Use any external reference voltage (<3.3V) at pin ADC_VREF. To enable this mode set this bit to 0 and static_cfg-vref=0 inside the related MADC_SEQ module. */
+ * Three modes are possible related to the effective ADC-Reference-voltage-input.
+ * 1. When pHndSeq->tConfiguration.eVrefVdd3 is set to 'DRV_ADC_SEQ_VREF_VDD3_DISABLED' actually the 'VREF_ADC-pin' is not used.
+ * In this case effectively VDDIO(3V3) is used as an internal reference-voltage. (s.a. 'ptSequencer->ptDevice->madc_seq_cfg_b.vref_vdd3').
+ * Otherwise, when set to 'DRV_ADC_SEQ_VREF_VDD3_ENABLED' one of the following modes is active. (s.a. 'ptDriver->ptDevice->madc_adc01_static_cfg_b.vref_buffer_enable')
+ *
+ * 2. When pHndADC->tConfiguration.eVrefBufferEnable is set to 'DRV_ADC_VREF_BUFFER_ENABLED'
+ * the netX-90 'VREF_ADC-pin' is driven by the internal 2.6V-Reference.
+ *
+ * 3. When pHndADC->tConfiguration.eVrefBufferEnable is set to 'DRV_ADC_VREF_BUFFER_DISABLED'
+ * the netX-90 'VREF_ADC-pin' must be driven by an external Reference-Voltage (e.g. filtered 3.3V).
+ *
+ * Note that mode-1 might be be more inaccurate due to noise on VDD3.
+ * Note that for mode-2 and -3, an external capacitor must be placed between the pins VREF_ADC and VSS_REF.
+ * Note that even if mode-1 is configured and thus the 'VREF_ADC-pin' not used,
+ * the 'eVrefBufferEnable' still controls if the 'VREF_ADC-pin' is driven by the 2.6V-Reference or not !
+ * Also make sure when driving the 'VREF_ADC-pin' by an external reference-voltage, do not activate 'eVrefBufferEnable' in this case
+ * since this might lead to unwanted currents ! (Such currents have even side-effects on mode-1.)
+ * And note that the pin VSS_REF must always be connected to the GND-net ! (otherwise the on-chip DC/DC will not work !)
+ * \sa DRV_ADC_SEQ_VREF_VDD3_E, DRV_ADC_SEQ_VREF_VDD3_Etag
+*/
 typedef enum DRV_ADC_VREF_BUFFER_Etag
 {
-  DRV_ADC_VREF_BUFFER_ENABLED = 0x1u,/*!< Drive 2.6V on Vref.*/
-  DRV_ADC_VREF_BUFFER_DISABLED = 0x0u,/*!< Behave passive .*/
+  DRV_ADC_VREF_BUFFER_ENABLED  = 0x1u,  /*!< Drive 2.6V on 'VREF_ADC-pin' */
+  DRV_ADC_VREF_BUFFER_DISABLED = 0x0u,  /*!< Behave passive .*/
   DRV_ADC_VREF_BUFFER_MIN = DRV_ADC_VREF_BUFFER_DISABLED, /*!< Min value for boundary checks.*/
   DRV_ADC_VREF_BUFFER_MAX = DRV_ADC_VREF_BUFFER_ENABLED /*!< Max value for boundary checks.*/
 } DRV_ADC_VREF_BUFFER_E;
@@ -166,7 +182,8 @@ typedef enum DRV_ADC_SEQ_32Bit_MODE_Etag
 } DRV_ADC_SEQ_32Bit_MODE_E;
 
 /*!
- * \brief Use core voltage of 3.3V as reference or use Vref of the adc (which can be external or 2.6V).
+ * \brief Use core-voltage of 3.3V as reference or use Vref of the adc (which can be external or 2.6V).
+ * \sa DRV_ADC_VREF_BUFFER_ENABLED, DRV_ADC_VREF_BUFFER_Etag
  */
 typedef enum DRV_ADC_SEQ_VREF_VDD3_Etag
 {
@@ -471,34 +488,41 @@ typedef struct DRV_ADC_STATE_Ttag
  */
 typedef struct DRV_ADC_SEQ_CONFIGURATION_Ttag
 {
-  DRV_ADC_SEQ_DEVICE_ID_E eDeviceID; /*!< The device to be used*/
-  DRV_OPERATION_MODE_E eOperationMode; /*!< Which programming method (DMA/IRQ/POLL) is used.*/
-  DRV_ADC_SEQ_DMA_MODE_E eDmaModeDisable; /*!< Enable/Disable DMA mode for coping of results.*/
-  DRV_ADC_SEQ_32Bit_MODE_E e32BitMode;/*!< Use 32Bit increment (fast, more space) or 16Bit increments (slower because of read modify write but less space).*/
-  DRV_ADC_SEQ_VREF_VDD3_E eVrefVdd3;/*!< Reference Select of ADC */
-  DRV_ADC_SEQ_CLK_SYNC_E eClkSync;/*!< Independent or synchronous clock. */
-  DRV_ADC_SEQ_CLK_PHASE_E eClkPhase;/*!< Shall be set to default value. Generation of the rising edge of the adcclk is delayed until the global clk_phase counter matches this value. NOTE: The rising edge of the adcclk ending the first sample period of a triggered measurement is NEVER delayed. */
-  DRV_ADC_SEQ_CLK_PERIOD_E eClkPeriod;/*!< Shall be set to default value. Duration of an adcclk period in system clock cycles-1 For odd values the high phase of adcclk is one system clock cycle longer than the low phase. */
-  DRV_ADC_SEQ_CHANNEL_TRACKING_TIME_E eChannelTrackingTime[DRV_ADC_INPUTS_MAX];/*!< ADC sample extension for input channel.
-   Length of 2nd adcclk in steps of 10ns system clock(~ delay of 3rd adcclk edge). The capacitor inside ADC needs time to be charged depending on the driving strength of the external signal. For 12 bit precision, this time should be 9*(Rint+Rext)*C, with Rint=1kOhm and C=7.5pF. The total formula for this value is: tt_add = ceil((6,75 x Rext/kOhm) + 6,75) - adcclk_period/10ns - 2 Set tt_add=4 if calculated value is smaller 4. The total ADC cycle time results in: tcycle = 14 * adcclk_period + clock_sync_delay (max 1 adcclk_period) + tt_add * 10ns. */
+  DRV_ADC_SEQ_DEVICE_ID_E eDeviceID;        /*!< The device to be used*/
+  DRV_OPERATION_MODE_E eOperationMode;      /*!< Which programming method (DMA/IRQ/POLL) is used.*/
+  DRV_ADC_SEQ_DMA_MODE_E eDmaModeDisable;   /*!< Enable/Disable DMA mode for coping of results.*/
+  DRV_ADC_SEQ_32Bit_MODE_E e32BitMode;      /*!< Use 32Bit increment (fast, more space) or 16Bit increments (slower because of read modify write but less space).*/
+  DRV_ADC_SEQ_VREF_VDD3_E eVrefVdd3;        /*!< Reference Select of ADC */
+  DRV_ADC_SEQ_CLK_SYNC_E eClkSync;          /*!< Independent or synchronous clock. */
+  DRV_ADC_SEQ_CLK_PHASE_E eClkPhase;        /*!< Shall be set to default value. Generation of the rising edge of the adcclk is delayed until the global clk_phase counter matches this value.\par
+                                                 NOTE: The rising edge of the adcclk ending the first sample period of a triggered measurement is NEVER delayed. */
+  DRV_ADC_SEQ_CLK_PERIOD_E eClkPeriod;      /*!< Shall be set to default value. Duration of an adcclk period in system clock cycles-1
+                                                 For odd values the high phase of adcclk is one system clock cycle longer than the low phase. */
+  DRV_ADC_SEQ_CHANNEL_TRACKING_TIME_E eChannelTrackingTime[DRV_ADC_INPUTS_MAX];
+                                            /*!< ADC sample extension-time for input channel. Length of 2nd adcclk in steps of 10ns system clock (~ delay of 3rd adcclk edge).
+                                                 The capacitor inside ADC needs time to be charged depending on the driving strength of the external signal.
+                                                 For 12 bit precision, this time should be 9*(Rint+Rext)*C, with Rint=1kOhm and C=7.5pF.
+                                                 The total formula for this value is: tt_add = ceil((6,75 x Rext/kOhm) + 6,75) - adcclk_period/10ns - 2 Set tt_add=4 if calculated value is smaller 4.
+                                                 The total ADC cycle time results in: tcycle = 14 * adcclk_period + clock_sync_delay (max 1 adcclk_period) + tt_add * 10ns. */
   DRV_ADC_SEQ_CONTINUOUS_MODE_E eContinuousMode;/*!< Defines if the sequencer captures continuously or once.*/
-  DRV_ADC_SEQ_BASE_ADDRESS_E eBaseAdr;/*!< Base address for writing the measurement results.*/
+  DRV_ADC_SEQ_BASE_ADDRESS_E eBaseAdr;      /*!< Base address for writing the measurement results.*/
   DRV_ADC_SEQ_MEAS_T tMeasurement[DRV_ADC_MEASUREMENTS_MAX];/*!< Every Sequencer can includes up to DRV_ADC_MEASUREMENTS_MAX measurements.*/
-  DRV_CALLBACK_F fnSequenceCompleteCallback; /*!< The callback used if a ADC sequence conversion complete*/
-  void* pSequenceCompleteCallbackHandle; /*!< The handle associated with the ADC sequence conversion complete callback.*/
-  DRV_CALLBACK_F fnMeasurementCompleteCallback[DRV_ADC_MEASUREMENTS_MAX]; /*!< The callback used if a single measurement conversion complete*/
-  void* pMeasurementCompleteCallbackHandle[DRV_ADC_MEASUREMENTS_MAX]; /*!< The handle associated with the single measurement conversion complete callback.*/
+  DRV_CALLBACK_F fnSequenceCompleteCallback;/*!< The callback used if a ADC sequence conversion complete*/
+  void* pSequenceCompleteCallbackHandle;    /*!< The handle associated with the ADC sequence conversion complete callback.*/
+  DRV_CALLBACK_F fnMeasurementCompleteCallback[DRV_ADC_MEASUREMENTS_MAX];   /*!< The callback used if a single measurement conversion complete*/
+  void* pMeasurementCompleteCallbackHandle[DRV_ADC_MEASUREMENTS_MAX];       /*!< The handle associated with the single measurement conversion complete callback.*/
 } DRV_ADC_SEQ_CONFIGURATION_T;
 
 /*!
- * \brief Type definition of the adc sequencer handle structure.
+ * brief Type definition of DRV_ADC_HANDLE_Ttag  DRV_ADC_HANDLE_T
  */
-typedef struct DRV_ADC_SEQ_HANDLE_Ttag DRV_ADC_SEQ_HANDLE_T;
+typedef struct DRV_ADC_HANDLE_Ttag  DRV_ADC_HANDLE_T;
 
 /*!
- * \brief Type definition of the adc handle structure.
+ * brief Type definition of DRV_ADC_SEQ_HANDLE_Ttag  DRV_ADC_SEQ_HANDLE_T
  */
-typedef struct DRV_ADC_HANDLE_Ttag DRV_ADC_HANDLE_T;
+typedef struct DRV_ADC_SEQ_HANDLE_Ttag  DRV_ADC_SEQ_HANDLE_T;
+
 
 /*!
  * \brief Type definition of the separate ADC configuration structure.
@@ -510,11 +534,14 @@ typedef struct DRV_ADC_STATIC_CFG_Ttag
 } DRV_ADC_STATIC_CFG_T;
 
 /*!
- * \brief The handle of the ADC driver.
+ * \brief The Sequence-Handle related to actual conversion functions.
  *
- * The configuration SHALL be changed before initializing the device and shall not be changed
- * afterwards.
- * The rest of it SHALL not be modified outside of the driver, even if it appears to be possible.
+ * This handle is used for functions like DRV_ADC_Seq_Init(), DRV_ADC_Seq_GetState(), DRV_ADC_Seq_GetSample().
+ * The default configuration using DRV_ADC_SEQ_INITIALIZER might need to be modified before
+ * calling the _Init-function and shall not be changed afterwards.
+ * \struct DRV_ADC_SEQ_HANDLE_T
+ * \struct DRV_ADC_SEQ_HANDLE_Ttag
+ * \sa DRV_ADC_HANDLE_T
  */
 typedef struct DRV_ADC_SEQ_HANDLE_Ttag
 {
@@ -542,11 +569,12 @@ typedef struct DRV_ADC_CONFIGURATION_Ttag
 } DRV_ADC_CONFIGURATION_T;
 
 /*!
- * \brief The handle of the driver.
- *
- * The configuration SHALL be changed before initializing the device and shall not be changed
- * afterwards.
+ * \brief The Main-Handle used by DRV_ADC_Driver_Init(),  DRV_ADC_Driver_DeInit() and some other functions.
+ * \struct DRV_ADC_HANDLE_T
+ * \struct DRV_ADC_HANDLE_Ttag
+ * The configuration SHALL be changed before initializing the device and shall not be changed afterwards.
  * The rest of it SHALL not be modified outside of the driver, even if it appears to be possible.
+ * \sa DRV_ADC_SEQ_HANDLE_T
  */
 typedef struct DRV_ADC_HANDLE_Ttag
 {

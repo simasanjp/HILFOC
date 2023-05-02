@@ -100,6 +100,16 @@ void mpwm_EnableGDU();
  */
 void mpwm_DisableGDU();
 
+
+/*!
+ * \brief     Disable PWM output.
+ */
+void mpwm_DisablePWM();
+
+/*!
+ * \brief     Enable PWM output.
+ */
+void mpwm_EnablePWM();
 /*!
  * \brief     Acknowledge mpwm interrupt.
  */
@@ -110,4 +120,7 @@ void mpwm_AcknowledgeIRQ();
  */
 void mpwm_Synch();
 
+ void mpwm_SS_Set();
+
+ void mpwm_SS_Clear();
 #endif /* #ifndef __MPWM_H_ */

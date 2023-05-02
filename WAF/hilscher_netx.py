@@ -3,15 +3,13 @@
 import shutil
 
 # Hilscher Waf version
-HILSCHER_VERSION = '1.10.1.0'
+HILSCHER_VERSION = '1.11.0.2'
 
 from waflib import Configure, Options, Utils, Task, Node, Logs, Scripting, Context, ConfigSet
 from waflib.Configure import conf, ConfigurationContext
 from waflib.TaskGen import feature, after_method, before_method, taskgen_method, task_gen
 from waflib.Context import WSCRIPT_FILE
-from waflib.Tools import c, cxx, asm
-import hilscher_toolchains
-import hilscher_compat
+from waflib.Tools import ccroot, c
 import os
 import re
 
@@ -29,25 +27,16 @@ c.cprogram.inst_to = None
 from waflib.Build import BuildContext, CleanContext, InstallContext, UninstallContext
 
 # The output directory has to be derived from the conditions conditions only
-def variant_dir(bld):
-    return os.path.join(bld.out_dir, Options.options.conditions)
-
-def get_doc(cls):
+def variant_dir(ctx):
     try:
-        cond = Options.options.conditions
-    except:
-        cond = 'release'
+        env = ctx.all_envs['']
+    except KeyError:
+        try:
+            env = ConfigSet.ConfigSet(os.path.join(ctx.cache_dir, '_cache.py'))
+        except (IOError, OSError):
+            raise ctx.errors.WafError(u'Project not configured')
 
-        for x in sys.argv:
-            if x.startswith('--conditions'):
-                cond = x.split('=')[1]
-
-    return ({
-       BuildContext    : 'Perform a %s build',
-       CleanContext    : 'Clean a %s build',
-       InstallContext  : 'Generate a %s distribution',
-       UninstallContext: 'Clean a %s distribution',
-    } [cls]) % cond
+    return os.path.join(ctx.out_dir, env.CONDITIONS)
 
 def setenv(self, name, env=None):
     if name not in self.all_envs or env:
@@ -71,11 +60,7 @@ BuildContext.setenv    = setenv
 BuildContext.force_env = force_env
 BuildContext.env = property(BuildContext.get_env, BuildContext.force_env)
 
-BuildContext.__doc__ = cproperty(get_doc, None)
-CleanContext.__doc__ = cproperty(get_doc, None)
-InstallContext.__doc__ = cproperty(get_doc, None)
-UninstallContext.__doc__ = cproperty(get_doc, None)
-
+hilscher_waf_dir = os.path.abspath(os.path.dirname(__file__))
 
 def opt_commasep(option, opt, value, parser):
     setattr(parser.values, option.dest, value.split(','))
@@ -83,13 +68,8 @@ def opt_commasep(option, opt, value, parser):
     CONFIGURATION
     ------------------------------------------ '''
 def options(conf):
-    conf.add_option('--custom-toolchain', action='store_true', dest='use_custom_toolchain', default=False, help='Use a custom toolchain for all builds')
-    conf.add_option('--compiler-prefix', action='store', dest='custom_toolchain_prefix', default='arm-none-eabi', help='Select a custom compiler prefix (e.g. "arm-none-eabi" [default])')
-    conf.add_option('--compiler-path', action='store', dest='custom_toolchain_path', default=None, help=r'Select a custom compiler path (e.g. "C:\Programme\Codesourcery\Sourcery G++ Lite\bin")')
-    conf.add_option('--compiler-driver', action='store', dest='custom_toolchain_driver', default='gcc', help=r'Select a custom compiler driver (e.g. "gcc" [default])')
-    conf.add_option('--cxxcompiler-driver', action='store', dest='custom_toolchain_cxxdriver', default='g++', help=r'Select a custom C++ compiler driver (e.g. "g++" [default])')
-    conf.add_option('--conditions', type="choice", choices="debug debugrel release".split(), default='release',
-                    help=r'Select a build condition (debug, debugrel or release[default] )')
+    conf.add_option('--conditions', type="choice", choices="debug debugrel release".split(), default=None,
+                help=u'Select a build condition (debug, debugrel or release[default] )')
 
     # Overwrite default installation root
     default_destdir = os.environ.get('DESTDIR', 'dist')
@@ -98,23 +78,21 @@ def options(conf):
     conf.add_option('--dump-environment', action='callback', type='string', default=[], callback=opt_commasep,
                     help='Log selected environment variables to file (e.g. "DEFINES,CFLAGS')
 
+    conf.load('hilscher_toolchains', tooldir = [ hilscher_waf_dir ])
+
 ''' configuration stuff    '''
 def configure(conf):
-    opt = Options.options
-
     conf.msg('Hilscher Waf version', HILSCHER_VERSION)
     conf.check_waf_version(mini="1.6.11")
 
     conf.setenv('')
-    conf.cc_common_flags()
-
-    conf.env['use_custom_toolchain'] = opt.use_custom_toolchain
+    conf.env['CONDITIONS'] = conf.options.conditions or 'release'
 
     for x in ['patch', 'svn', 'python']:
       conf.find_program(x, var=x.upper(), mandatory=False)
 
     # check if hboot_image_compiler is available
-    p = os.path.abspath( os.path.join(os.path.dirname(__file__), 'hboot_image_compiler'))
+    p = os.path.abspath( os.path.join(hilscher_waf_dir, 'hboot_image_compiler'))
     if not os.path.isdir(p):
         p = ''
 
@@ -122,7 +100,7 @@ def configure(conf):
     conf.env['HBOOT_IMAGE_COMPILER'] = p
 
     # check if netx90_app_iflash_image.py is available
-    p = os.path.abspath( os.path.join(os.path.dirname(__file__), 'hboot_image_compiler/netx90_app_iflash_image.py'))
+    p = os.path.abspath( os.path.join(hilscher_waf_dir, 'hboot_image_compiler/netx90_app_iflash_image.py'))
     if not os.path.isfile(p):
         p = ''
 
@@ -130,30 +108,42 @@ def configure(conf):
     conf.env['HBOOT_APPFLASH_IMAGE'] = p
 
     # check if netx90_app_image.py is available
-    p = os.path.abspath( os.path.join(os.path.dirname(__file__), 'hboot_image_compiler/netx90_app_image.py'))
+    p = os.path.abspath( os.path.join(hilscher_waf_dir, 'hboot_image_compiler/netx90_app_image.py'))
     if not os.path.isfile(p):
         p = ''
 
     conf.msg("Checking for app image update tool", p or False)
     conf.env['HBOOT_APP_IMAGE'] = p
 
-
-    from waflib import Context
-    requested_toolchains = getattr(Context.g_module, 'REQUIRED_TOOLCHAINS', ['hitex', 'codesourcery'])
-
-    for toolchain in requested_toolchains:
-        try:
-            find_cross_gcc(conf, toolchain)
-        except conf.errors.ConfigurationError:
-            conf.start_msg("Toolchain '" + toolchain + "'")
-            conf.end_msg("not found (Some projects may not be available for building)", 'YELLOW')
-
-    if opt.use_custom_toolchain or opt.custom_toolchain_path:
-      find_cross_gcc(conf, 'custom')
+    conf.load('hilscher_toolchains', tooldir = [ hilscher_waf_dir ])
 
 @conf
-def get_conditions(self):
-    return Options.options.conditions
+def get_conditions(ctx):
+    assert(ctx.env.get_flat('CONDITIONS') in ('release', 'debugrel', 'debug'))
+    return ctx.env.get_flat('CONDITIONS')
+
+_task_gen_init = task_gen.__init__
+def task_gen_init(self, *k, **kw):
+    ''' Overide of default task gen constructor to check for double
+        task generators '''
+
+    if ('name' in kw) and (kw.get('hidden_from_list', False) != "Internal"):
+        bld, name = kw['bld'], kw['name']
+        target = kw.get('target', name)
+
+        try:
+            bld.get_tgen_by_name(kw['name'])
+        except bld.errors.WafError:
+            pass
+        else:
+            bld.fatal(u'%s: Double task generator %r. Please use unique "name" parameter for target %r' % (bld.cur_script.path_from(bld.srcnode), name, target))
+
+    return _task_gen_init(self, *k, **kw)
+task_gen.__init__ = task_gen_init
+
+
+match_target      = re.compile(  r'(?P<target_triplet>[^/]+)/(?P<cc_version>[0-9a-z.]+)/(?P<target>.+)$').match
+match_name_prefix = re.compile(r'_?(?P<target_triplet>[^/]+)/(?P<cc_version>[0-9a-z.]+)/').match
 
 @conf
 def get_tgen_by_name(self, name):
@@ -178,9 +168,9 @@ def get_tgen_by_name(self, name):
 
     if not default_cache:
         hilscher_cache = self.task_gen_hilscher_cache_names = {}
-        aliases = set()
 
-        match = re.compile('(?P<target_triple>[^/]+)/(?P<cc_version>[0-9.]+)/(?P<target>.+)$').match
+        aliases = set()
+        multiple_defs = set()
 
         # create the index lazily
         for g in self.groups:
@@ -192,21 +182,16 @@ def get_tgen_by_name(self, name):
                     pass
                 else:
                     if n in default_cache:
-                        tg_old = default_cache[n]
-
-                        old_script = tg_old.path.find_node('wscript')
-                        cur_script = tg.path.find_node('wscript')
-
-                        Logs.error('Error: Task generator %r defined in %r redefined in %r' % (n,old_script.nice_path(), cur_script.nice_path()))
+                        multiple_defs.add(n)
 
                     # setup default mapping
                     default_cache[n] = tg
                     hilscher_cache[n] = tg
 
-                    m = match(n)
+                    m = match_target(n)
 
                     if m:
-                        alias = '%s/*/%s' % m.group('target_triple', 'target')
+                        alias = '%s/*/%s' % m.group('target_triplet', 'target')
 
                         if alias not in aliases:
                             aliases.add(alias)
@@ -219,10 +204,15 @@ def get_tgen_by_name(self, name):
                                 Logs.debug('task_gen: creating alias "%s" for "%s"' % (alias, n))
                                 hilscher_cache[alias] = tg
                         elif alias in hilscher_cache:
-                            Logs.warn('Warning: Removing doubly defined alias "%s"' % (alias))
+                            if getattr(tg,'hidden_from_list', False) != 'Internal':
+                                Logs.warn('Warning: Removing doubly defined alias "%s"' % (alias))
                             del hilscher_cache[alias]
 
         self.task_gen_cache_names = default_cache
+
+        for x in multiple_defs:
+            del default_cache[x]
+            del hilscher_cache[x]
 
     try:
         return self.task_gen_hilscher_cache_names[name]
@@ -251,7 +241,6 @@ def get_tgen_by_name(self, name):
         raise self.errors.WafError('Undefined task generator name %r in %r%s' % (name,\
             cur_script.nice_path(), known_str))
 
-
 import shlex
 from waflib import Utils, Logs
 from waflib.Build import BuildContext
@@ -271,17 +260,6 @@ def setup_build(ctx, id, device=None, toolchain=None):
             ctx.fatal('Environment for building %s not setup' % id)
         else:
             ctx.setenv(envname)
-
-@conf
-def find_cross_gcc(conf, name):
-    '''This function is only left for backwards compat'''
-    conf.configure_toolchain(name)
-
-    conf.start_msg("Toolchain '" + name + "'")
-    conf.end_msg("%s %s" %(conf.env.CC_NAME, ".".join(conf.env.CC_VERSION)))
-
-    conf.setenv(name, conf.env)
-    conf.setenv('')
 
 
 def autorecurse(ctx, mandatory=True, excl=None):
@@ -518,8 +496,7 @@ def stlib(bld, target, toolchain=None, platform=None, **kw):
 
     bld.check_args(**kw)
 
-    if not handle_toolchain(bld, kw):
-        return
+    bld.handle_toolchain(kw)
 
     # separate arm and thumb sources:
     process_source(bld, kw)
@@ -528,8 +505,7 @@ def stlib(bld, target, toolchain=None, platform=None, **kw):
     features = Utils.to_list(kw.pop('features', []))
 
     # create build task
-    bld(features=["c", "cstlib"] + features, **kw)
-
+    return bld(features=["c", "cstlib"] + features, **kw)
 
 @conf
 def program(bld, *k, **kw):
@@ -566,36 +542,41 @@ def program(bld, *k, **kw):
 
     bld.check_args(**kw)
 
-    if not handle_toolchain(bld, kw):
-        return
+    bld.handle_toolchain(kw)
 
-    ext_pattern = os.path.splitext(bld.env.cprogram_PATTERN)[1]
-    root_target, ext_target  = os.path.splitext(kw['target'])
+    return bld._program_internal(**kw)
 
-    if ext_target and (ext_pattern == ext_target):
-        # deprecated target syntax
-        Logs.pprint('YELLOW', u'Deprecated target syntax for "%s". (Use "%s" instead)' %(kw['target'], root_target))
-        target = bld.path.find_or_declare(kw['target'])
-    else:
-        target = bld.path.find_or_declare(bld.env.cprogram_PATTERN % kw['target'])
+@conf
+def _program_internal(bld, **kw):
+    # Perform the following actions only when toolchain was found
+    if 'tgen_disabled' not in kw:
+        if "linkerscript" in kw:
+            ext_pattern = os.path.splitext(bld.env.cprogram_PATTERN)[1]
+            root_target, ext_target  = os.path.splitext(kw['target'])
 
-    if "linkerscript" in kw:
-        ldfile = bld.path.find_node(kw['linkerscript'])
+            if ext_target and (ext_pattern == ext_target):
+                # deprecated target syntax
+                Logs.pprint('YELLOW', u'Deprecated target syntax for "%s". (Use "%s" instead)' %(kw['target'], root_target))
+                target = bld.path.find_or_declare(kw['target'])
+            else:
+                target = bld.path.find_or_declare(bld.env.cprogram_PATTERN % kw['target'])
 
-        if not ldfile:
-            bld.fatal('Error: "%s", target "%s": Linkerscript "%s" not found!' % (bld.path.find_node('wscript').nice_path(bld.env), kw['target'], kw['linkerscript']))
+            ldfile = bld.path.find_node(kw['linkerscript'])
 
-        bld.add_manual_dependency(target, ldfile)
-    else:
-        if not "linkerscript_optional" in bld.env.TOOL_OPTIONS:
-            bld.fatal("No linkerscript for target %s" % (kw['target']))
+            if not ldfile:
+                bld.fatal('Error: "%s", target "%s": Linkerscript "%s" not found!' % (bld.path.find_node('wscript').nice_path(bld.env), kw['target'], kw['linkerscript']))
+
+            bld.add_manual_dependency(target, ldfile)
+        else:
+            if not "linkerscript_optional" in bld.env.TOOL_OPTIONS:
+                bld.fatal("No linkerscript for target %s" % (kw['target']))
 
     process_source(bld, kw)
 
     # get extra features
     features = Utils.to_list(kw.pop('features', []))
 
-    bld(features=["c", "cprogram", 'compile_thumb'] + features, **kw)
+    return bld(features=["c", "cprogram", 'compile_thumb'] + features, **kw)
 
 
 @conf
@@ -766,11 +747,6 @@ def svn_get_info(bld, path_or_url):
 
     info = dict(map(str.strip, line.split(':', 1)) for line in out.splitlines() if line)
     return info
-
-@feature('*')
-@before_method('propagate_uselib_vars')
-def apply_conditions(self):
-    self.features = ['compile_' + Options.options.conditions] + Utils.to_list(getattr(self, 'features', []))
 
 @feature('compile_thumb', 'compile_arm')
 def dummy_func(self):
@@ -950,32 +926,23 @@ def process_source(bld, kw):
         if nod is None:
             raise bld.errors.WafError("Source file %s not found" % x)
 
+    features_objects = list( f for f in features if f != 'libsused')
     # arm
     if source_thumb:
-        feature_assembly = []
-        exts = get_extensions(source_thumb)
-        if's'in exts or'S'in exts or'asm'in exts or'ASM'in exts:
-            feature_assembly = ['asm']
-
         bld.objects(
             source=source_thumb,
-            features=['compile_thumb', 'c', 'cxx', 'asm'] + features,
+            features=['compile_thumb', 'c', 'cxx', 'asm'] + features_objects,
             use=use[:],
             target=name + "_thumb_objs",
-            hidden_from_list=True,
+            hidden_from_list="Internal",
             **kw)
 
     if source_arm:
-        feature_assembly = ''
-        exts = get_extensions(source_arm)
-        if's'in exts or'S'in exts or'asm'in exts or'ASM'in exts:
-            feature_assembly = ' asm'
-
         bld.objects(
             source=source_arm,
-            features=['compile_arm', 'c', 'cxx', 'asm'] + features,
+            features=['compile_arm', 'c', 'cxx', 'asm'] + features_objects,
             use=use[:],
-            hidden_from_list=True,
+            hidden_from_list="Internal",
             target=name + "_arm_objs",
              **kw)
 
@@ -998,11 +965,9 @@ def process_source(bld, kw):
 # we need this to create unique environment ids
 index = 0
 
-match_prefix = re.compile(r'_?(?P<triplet>[^/]+)/[0-9]+.[0-9].[0-9]+/').match
-
 @conf
 def handle_toolchain(bld, kw):
-    name    = kw.get('name', None)
+    name      = kw.get('name', None)
     target    = kw.get('target', None)
     build_id  = kw.get('build_id', None)
     toolchain = kw.get('toolchain', None)
@@ -1011,11 +976,11 @@ def handle_toolchain(bld, kw):
     # Check to detect mismatch between name and platform argument
     # when name has a prefix it must match the platform. Otherwise raise
     # an error because this might cause unexpected issues
-    m = match_prefix(name or '')
+    m = match_name_prefix(name or '')
     if m:
         Logs.debug('toolchain: Name "%s" combined with platform "%s"' % (name, platform))
 
-        target_triplet = m.group('triplet') + '/'
+        target_triplet = m.group('target_triplet') + '/'
 
         if name != target_triplet:
             try:
@@ -1024,7 +989,7 @@ def handle_toolchain(bld, kw):
                 pass
             else:
                 if not prefix.startswith(target_triplet):
-                    bld.fatal('Unexpected name prefix for "%s" combined with platform "%s"' % (name, platform))
+                    bld.fatal('Unexpected name prefix for %r using toolchain %r and platform %r' % (name, toolchain, platform))
 
 
     if bld.env.use_custom_toolchain:
@@ -1037,8 +1002,7 @@ def handle_toolchain(bld, kw):
         try:
             bld.setup_build(id=build_id)
         except bld.errors.WafError:
-            Logs.pprint('YELLOW', "Skipping target \'%s\' because toolchain \'%s\' not found." % (target, toolchain))
-            return False
+            kw['tgen_disabled'] = "Skipping target \'%s\' because toolchain \'%s\' not found." % (target, toolchain)
     elif (toolchain is not None) and (platform is not None):
         # setup the build contexts environment to the needs of our next build
         # this is the old method
@@ -1048,23 +1012,22 @@ def handle_toolchain(bld, kw):
         try:
             bld.select_toolchain(toolchain)
         except bld.errors.ConfigurationError:
-            Logs.pprint('YELLOW', "Skipping target \'%s\' because toolchain \'%s\' not found." % (target, toolchain))
-            return False
+            kw['tgen_disabled'] = "Skipping target \'%s\' because toolchain \'%s\' not found." % (target, toolchain)
 
-        bld.setenv('target_%s_%u' % (target, index), bld.env)
+        env_name = 'target_' + (name or target)
+        if env_name in bld.all_envs:
+            del bld.all_envs[env_name]
+
+        bld.setenv(env_name, bld.env)
 
         # finally apply the platform (device) specific flags
-        bld.apply_device_flags(platform)
+        bld.apply_device_flags(platform, toolchain)
     else:
         bld.fatal('Target %s does not specify toolchain and platform or specify the build id!' % target)
-
-    return True
 
 """ Find the location of a foreign library. Used by :py:class:`waflib.Tools.ccroot.read_shlib` and :py:class:`waflib.Tools.ccroot.read_stlib`. Modified function, original in ccroot.py """
 @feature('fake_lib')
 def process_lib(self):
-    from waflib.Tools.ccroot import lib_patterns
-    from waflib              import Errors
     node = None
 
     paths = self.to_list(self.lib_paths)
@@ -1074,7 +1037,7 @@ def process_lib(self):
 
     name = self.target or self.name
 
-    names = [x % name for x in lib_patterns[self.lib_type]]
+    names = [x % name for x in ccroot.lib_patterns[self.lib_type]]
     for x in paths:
         if not isinstance(x, Node.Node):
             x = self.bld.root.find_node(x) or self.path.find_node(x)
@@ -1090,7 +1053,7 @@ def process_lib(self):
             continue
         break
     else:
-        raise Errors.WafError('could not find library %r' % self.name)
+        raise self.bld.errors.WafError('could not find library %r' % self.name)
 
     self.link_task = self.create_task('fake_%s' % self.lib_type, [], [node])
 
@@ -1261,21 +1224,29 @@ class ListContext(BuildContext):
     self.timer = Utils.Timer()
 
     for g in self.groups:
-      for tg in g:
-        try:
-          f = tg.post
-        except AttributeError:
-          pass
-        else:
-          f()
+        for tg in g:
+            # avoid execution of unneeded functions
+            tg.meths = [x for x in tg.meths if str(x) in ('check_tgen_availabilty', 'hil_parse_version_header') ]
+
+            if not getattr(tg, 'posted', None):
+                tg.post()
 
     try:
       # force the cache initialization
       self.get_tgen_by_name('')
     except:
       pass
-    lst = list(self.task_gen_cache_names.keys())
-    lst.sort()
+
+    tgens = self.task_gen_cache_names.values()
+
+    # omit hidden targets
+    tgens = (tg for tg in tgens if not getattr(tg, 'hidden_from_list', False))
+
+    # omit sdks
+    tgens = (tg for tg in tgens if not getattr(tg, 'SDK', False))
+
+    # omit external libs
+    tgens = (tg for tg in tgens if 'fake_lib' not in Utils.to_list(getattr(tg, 'features', [])))
 
     SIZE_TARGET = len('Target')
     SIZE_TOOLCHAIN = len('Toolchain')
@@ -1283,62 +1254,68 @@ class ListContext(BuildContext):
 
     target_list = {}
 
-    for k in lst:
-      # Strip out external components which cannot be build anyway
-      tg = self.get_tgen_by_name(k)
-      toolchain = None
-      if getattr(tg, 'hidden_from_list', False):
-        Logs.debug('list: Supressing hidden component %s' % k)
-      else:
-        if getattr(tg, 'toolchain', None):
-          toolchain = tg.toolchain
-        elif getattr(tg, 'build_id', None):
-          toolchain = tg.env.TOOLCHAIN
-        elif getattr(tg, 'use', None):
-          # Search use components to valid toolchain
-          for _use in Utils.to_list(tg.use):
-            _usetg = self.get_tgen_by_name(_use)
-            toolchain = getattr(_usetg, 'toolchain', None)
-        else:
-            toolchain = None
+    def get_toolchain(tg):
+        toolchain = tg.env.TOOLCHAIN or None
+
+        return getattr(tg, 'toolchain', toolchain)
+
+    for tg in tgens:
+        # Strip out external components which cannot be build anyway
+        toolchain = get_toolchain(tg)
+
+        if toolchain is None:
+            use_list  = []
+            work_list = Utils.to_list(getattr(tg,'use', []))
+
+            while work_list and (toolchain is None):
+                try:
+                    x = self.get_tgen_by_name(work_list.pop(0))
+                except KeyError:
+                    pass
+                else:
+                    if (x not in use_list):
+                        toolchain = get_toolchain(x)
+
+                        use_list.append(x)
+                        work_list.extend(Utils.to_list(getattr(x,'use',[])))
+
+            del use_list
+            del work_list
+
+        name = tg.name
 
         if not toolchain:
-          Logs.debug("list: Supressing component without 'toolchain' attribute %s" % k)
-          continue
+            Logs.debug("list: Supressing component without 'toolchain' attribute %s" % name)
+            continue
 
-        toolchain_env = self.all_envs[toolchain].derive()
+        # Dont report targets for which we didnt try to load a toolchain
+        if toolchain not in self.get_requested_toolchains():
+            continue
 
-        if 'CC' in toolchain_env:
+        if toolchain in self.all_envs:
           avail = '*'.center(3)
         else:
           avail = ' '.center(3)
 
-        target = k
         description = getattr(tg, 'description', '')
         if getattr(tg, 'version', ''):
           description += ' - ' + tg.version
 
-        if len(target) > SIZE_TARGET:
-          SIZE_TARGET = len(target)
-
-        if len(toolchain) > SIZE_TOOLCHAIN:
-          SIZE_TOOLCHAIN = len(toolchain)
-
-        if len(description) > SIZE_DESCRIPTION:
-          SIZE_DESCRIPTION = len(description)
+        SIZE_TARGET    = max(SIZE_TARGET, len(name))
+        SIZE_TOOLCHAIN = max(SIZE_TOOLCHAIN, len(toolchain))
+        SIZE_DESCRIPTION = max(SIZE_DESCRIPTION, len(description))
 
         displaygroup = getattr(tg, 'displaygroup', 'default')
 
-        if displaygroup in target_list:
-          target_list[displaygroup].append({ 'avail'       : avail,
-                                             'target'      : target,
-                                             'toolchain'   : toolchain,
-                                             'description' : description, })
-        else:
-          target_list[displaygroup] = [ { 'avail'       : avail,
-                                        'target'      : target,
-                                        'toolchain'   : toolchain,
-                                        'description' : description, } ]
+        try:
+            l = target_list[displaygroup]
+        except KeyError:
+            l = target_list[displaygroup] = []
+
+        l.append({ 'avail'       : avail,
+                   'target'      : name,
+                   'toolchain'   : toolchain,
+                   'description' : description, })
 
     TOTAL_SIZE = 3 + (SIZE_TARGET + 2) + (SIZE_TOOLCHAIN + 2) + SIZE_DESCRIPTION
     Logs.pprint('GREEN', 'Available Targets:')
@@ -1346,12 +1323,12 @@ class ListContext(BuildContext):
     Logs.pprint('GREEN', 'A'.center(3) + 'Target'.ljust(SIZE_TARGET + 2) + 'Toolchain'.ljust(SIZE_TOOLCHAIN + 2) + 'Description')
     Logs.pprint('GREEN', '-' * TOTAL_SIZE)
 
-    for group in target_list:
+    for group, targets in target_list.items():
       Logs.pprint('RED', '-' * len(group))
       Logs.pprint('RED', group)
       Logs.pprint('RED', '-' * len(group))
 
-      for x in target_list[group]:
+      for x in sorted(targets, key = lambda x : x['target']):
         output = x['avail'].center(3) + x['target'].ljust(SIZE_TARGET + 2)
         output += x['toolchain'].ljust(SIZE_TOOLCHAIN + 2) + x['description']
         Logs.pprint('GREEN', output)
@@ -1866,21 +1843,21 @@ def check_tgen_availability(self):
                 msg = "task_gen {y.name} is missing tgen_disabled attribute when processing tgen {self.name}".format(**locals())
 
     # we always want to cleanup!
-    if self.bld.cmd in ["clean", "list"]:
+    if self.bld.cmd == "clean":
         tgen_disabled = False
 
     self.tgen_disabled = tgen_disabled
 
-    if tgen_disabled:
-        self.use = []
+    toolchain = (getattr(self,'toolchain', None))
 
+    # Only report if this target is supposed to be part of this project
+    if (toolchain is None) or (toolchain in self.bld.get_requested_toolchains()):
+        if (not getattr(self, 'hidden_from_list', False)) or ('cprogram' in self.features):
+            if msg:
+                Logs.pprint('YELLOW', "Warning: " + msg)
 
-    if (not getattr(self, 'hidden_from_list', False)) or ('cprogram' in self.features):
-        if msg:
-            Logs.pprint('YELLOW', "Warning: " + msg)
-
-        if tgen_disabled:
-            Logs.pprint('YELLOW', 'Warning: target \'{self.name}\' disabled: {tgen_disabled}'.format(**locals()))
+            if tgen_disabled:
+                Logs.pprint('YELLOW', 'Warning: target \'{self.name}\' disabled: {tgen_disabled}'.format(**locals()))
 
 
     # finally check if we should disable this tgen
@@ -2030,6 +2007,8 @@ def add_standardlibs(self):
 # Redefine asm class:
 # make sure that the assembler also passed the C-Defines, as we are using gcc as assembler
 # which may include .h files with #ifdef
+# The import is mandatory, otherwise the created task will be overwritten later on again
+from waflib.Tools import asm
 class asm(Task.Task):
     color = 'NORMAL'
     run_str = '${AS} ${ASFLAGS} ${CPPPATH_ST:INCPATHS} ${DEFINES_ST:DEFINES} ${AS_SRC_F}${SRC} ${AS_TGT_F}${TGT}'
@@ -2290,3 +2269,22 @@ def install_files_fixed(self, dest, files, env=None, chmod=Utils.O644, relative_
 
 
 InstallContext.install_files = install_files_fixed
+
+
+
+from waflib import Task
+from waflib.TaskGen import feature, after_method
+
+class objcopy_hex(Task.Task):
+    u''' Run objcopy on a file'''
+    color   = 'PINK'
+    log_str = '[OBJCOPY] $SOURCES $TARGETS'
+    run_str = '${OBJCOPY} -O ihex ${SRC} ${TGT}'
+
+@feature('rawimage')
+@after_method('apply_link')
+def build_rawimage(self):
+    elf_node = self.link_task.outputs[0]
+
+    self.objcopy_task = self.create_task('objcopy', elf_node ,[elf_node.change_ext('bin')])
+    self.objcopy_task = self.create_task('objcopy_hex', elf_node ,[elf_node.change_ext('hex')])

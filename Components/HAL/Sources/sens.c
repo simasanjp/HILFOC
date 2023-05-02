@@ -120,6 +120,7 @@ uint32_t * sens_HallTimes()
 void sens_QEIInit()
 {
 
+
     menc_app->menc_config_b.enc0_en = 1u;
     menc_app->menc_config_b.enc0_filter_sample_rate = 7u;
     menc_app->menc_capture0_config_b.trigger = 0x1000a;// GPIO_APP_COUNTER0 = 0 //0x10004;
@@ -129,6 +130,9 @@ void sens_QEIInit()
     menc_app->menc_capture1_config_b.src_nr = 0u; //Channel 0
     menc_app->menc_capture1_config_b.src = 3u;
     menc_app->menc_config_b.enc0_count_dir = 0U; //Set to Invert counting direction
+    menc_app->menc_capture2_config_b.src_nr = 0u; //Channel 0
+    menc_app->menc_capture2_config_b.src = 1u;
+    menc_app->menc_capture2_config_b.trigger = 0x1000a;// GPIO_APP_COUNTER0 = 0 //0x10004;
     /*Capture source (what to capture):
     0:  system time ns (independent of src_nr)
     1:  position channel 0/1
@@ -156,8 +160,7 @@ int32_t sens_QEIPosition()
 {
     int32_t ls32_Return;
     sens_s32_PosPrev = sens_s32_PosCurr;
-    sens_s32_PosCurr = menc_app->menc_enc0_position_b.val;
-
+    sens_s32_PosCurr =  menc_app->menc_capture2_val;//menc_app->menc_capture2_val
     ls32_Return = sens_s32_PosCurr - sens_s32_PosPrev;
 
     return ls32_Return;
@@ -175,3 +178,4 @@ uint32_t sens_QEITaTe()
     lu32_Return = menc_app->menc_capture1_val + sens_u32_TaPrev;
     return lu32_Return;
 }
+

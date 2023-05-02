@@ -1,8 +1,8 @@
 /**************************************************************************//**
  * \file    user_drv_conf.h
  * \brief   DRV configuration file.
- * $Revision: 5214 $
- * $Date: 2019-04-17 17:55:24 +0200 (Mi, 17 Apr 2019) $
+ * $Revision: 9333 $
+ * $Date: 2021-09-27 11:58:14 +0200 (Mo, 27 Sep 2021) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -50,7 +50,7 @@ extern "C"
 //#define RTOS_USED
 
 /*!
- * \brief RTOS_USED relevant define that ignores the compiler error that is 
+ * \brief RTOS_USED relevant define that ignores the compiler error that is
  * generated to let the engineer know, that those functions has to be implemented
  * by him.
  */
@@ -60,6 +60,11 @@ extern "C"
  * \brief RTOS_USED relevant type used for the element to be locked
  */
 //#define DRV_LOCK_T
+
+/*!
+ * \brief RTOS_USED relevant initializer value of the type to be locked as rvalue is in default the mutex initializer value.
+ */
+//#define DRV_LOCK_INITIALIZER_VALUE
 
 /*!
  * \brief RTOS_USED relevant initializer of the type to be locked as rvalue.

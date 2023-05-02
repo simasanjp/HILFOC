@@ -49,6 +49,9 @@
  * \brief     Capture frequency to seconds.
  */
 #define PSE_CPUFREQ_TO_SECONDS                  (1.0f/PAR_CPU_FREQ_HZ)
+
+
+int16_t  Pse_gs16_MechSpeedRPM;
 /*!
  * \brief      Estimated speed variables.
  */
@@ -57,7 +60,12 @@ static Pse_Speed_T Pse_gs_Speed;
  * \brief     Estimated position variables.
  */
 static Pse_Position_T Pse_gs_Position;
-#if (PAR_USE_HALL_SPEED == 1)
+/*!
+ * \brief     Calibrated hall state boundaries.
+ */
+static Pse_HallStateBoundaries_T Pse_gs_HallBoundaries;
+
+
 /*!
  * \brief     Estimated speed by hall.
  */
@@ -65,20 +73,21 @@ static Pse_Speed_T Pse_gs_SpeedHall;
 /*!
  * \brief    PI-filter parameters for hall speed estimation.
  */
-static Math_PI_Controller_Parameter_T Pse_gs_HallPIControlPar;
+static MATH_Fixedpt_PI_Controller_Parameter_T Pse_gs_HallPIControlPar;
 /*!
  * \brief    PI-filter state for hall speed estimation.
  */
-static Math_PI_Controller_State_T Pse_gs_HallPIControlState;
-#endif
+static MATH_Fixedpt_PI_Controller_State_T Pse_gs_HallPIControlState;
+
 /*!
  * \brief     QEI speed estimation parameters.
  */
 static Pse_MENC_ParameterT Pse_gs_EncoderPar;
 /*!
- * \brief     Holds the state of hall sensors.
+ * \brief     Speed Filter State.
  */
-static Pse_HallState_T Pse_HallStateHybrid;
+static int32_t Pse_SpeedFilterState;
+
 
 /*!
  * \details   Initialize parameters and Sensors (hall and QEI).
@@ -90,18 +99,19 @@ void Pse_Init()
   Pse_gs_Speed.ElecSpeedRPM = 0;
   Pse_gs_Speed.MechSpeedRPM = 0;
   Pse_gs_Speed.ElecSpeedPERPWM = 0.0f;
-#if (PAR_USE_HALL_SPEED == 1)
+
+
   Pse_gs_SpeedHall.ElecSpeedDIGPERPWM = 0;
   Pse_gs_SpeedHall.ElecSpeedRPM = 0;
   Pse_gs_SpeedHall.MechSpeedRPM = 0;
   Pse_gs_SpeedHall.ElecSpeedPERPWM = 0.0f;
 
-  Pse_gs_HallPIControlPar.f_KP = 0.5f;
-  Pse_gs_HallPIControlPar.f_KI = 0.0001f;
-  Pse_gs_HallPIControlPar.f_LowerLimit = -(float) ((PAR_MAX_SPEED_RPM * PSE_MECH_TO_ELEC_SPEED) / (PSE_ELECRPM_TO_ELECPERPWM ));
-  Pse_gs_HallPIControlPar.f_UpperLimit = (float) (PAR_MAX_SPEED_RPM * PSE_MECH_TO_ELEC_SPEED) / (PSE_ELECRPM_TO_ELECPERPWM );
-  Pse_gs_HallPIControlState.f_integral = 0.0f;
-#endif
+  Pse_gs_HallPIControlPar.s32_KP = 400;
+  Pse_gs_HallPIControlPar.s32_KI = 10;
+  Pse_gs_HallPIControlPar.s32_LowerLimit = -(32000 << 16);
+  Pse_gs_HallPIControlPar.s32_UpperLimit = (32000 << 16);
+  Pse_gs_HallPIControlState.s32_i_n = 0;
+
   Pse_gs_Position.u16_Theta = 0u;
   Pse_gs_Position.s_State = PSE_UNKNOWN;
   Pse_gs_EncoderPar.s32_CapturedPosition = 0;
@@ -114,9 +124,6 @@ void Pse_Init()
   sens_QEIInit();
 }
 
-#if (PAR_USE_OPENLOOP== 1)
-
-
 /*!
  * \details   By setting position manually, a voltage vector can be created for open loop control.
  * @param[in]     au16_Position Rotor position in uint16 scale.
@@ -125,12 +132,50 @@ void Pse_SetPositionManually(uint16_t au16_Position)
 {
   Pse_gs_Position.s_State = PSE_MANUAL;
   Pse_gs_Position.u16_Theta = au16_Position;
+  Pse_gs_Speed.ElecSpeedDIGPERPWM = 0;
 }
-#endif
+
 
 Pse_Position_T Pse_GetPosition(void)
 {
+  Pse_gs_Position.s_State = PSE_MANUAL;
+  Pse_gs_Position.u16_Theta += Pse_gs_Speed.ElecSpeedDIGPERPWM;
   return Pse_gs_Position;
+}
+
+Pse_Speed_T Pse_GetSpeed(void){
+  return Pse_gs_Speed;
+}
+
+void Pse_SetSpeedManually(int16_t as16_SpeedRPM){
+  Pse_gs_Speed.MechSpeedRPM = as16_SpeedRPM;
+
+  /* Calculate Electrical rpm */
+  Pse_gs_Speed.ElecSpeedRPM = Pse_gs_Speed.MechSpeedRPM * PSE_MECH_TO_ELEC_SPEED;
+
+  /* Electrical speed  per mpwm period */
+  Pse_gs_Speed.ElecSpeedPERPWM = Pse_gs_Speed.ElecSpeedRPM / PSE_ELECRPM_TO_ELECPERPWM;
+
+  /* Speed DIGITS per mpwm period */
+  Pse_gs_Speed.ElecSpeedDIGPERPWM = (int16_t) (PSE_ELECPERPWM_TO_ELECPERPWM_DIG * Pse_gs_Speed.ElecSpeedPERPWM);
+}
+
+void Pse_SetHallBoundaries(uint16_t * ap_Values, uint8_t * ap_HallState){
+  uint16_t lu16_Mid;
+  uint8_t lu8_Prev;
+  for(uint8_t i = 0; i < 6; i++) {
+    if (i > 0u) {
+      lu8_Prev = i - (uint8_t) 1u;
+    } else {
+      lu8_Prev = 5u;
+    }
+    /* Overflow is intended */
+    lu16_Mid = ((uint16_t)(ap_Values[i] - ap_Values[lu8_Prev])/2u);
+    Pse_gs_HallBoundaries.u16_CalibratedMidPoints[i] = ap_Values[lu8_Prev] + lu16_Mid;
+    Pse_gs_HallBoundaries.u16_CalibratedBoundaries[i] = ap_Values[i];
+    Pse_gs_HallBoundaries.u8_CalibratedHallStates[i] = ap_HallState[i];
+    Pse_gs_HallBoundaries.u8_HallStatesToIndex[ap_HallState[i]] = i;
+  }
 }
 /*!
  * \details   Speed is estimated by counting signals from QEI. \n
@@ -141,10 +186,10 @@ Pse_Position_T Pse_GetPosition(void)
  */
 Pse_Speed_T Pse_EstimateSpeed(void)
 {
-  /* Initialize with 1ms in clock cycles */
+  /* Initialize with 10ms in clock cycles */
   uint32_t lu32_CapturePeriod = (uint32_t) PSE_CAPTURE_FREQ_CLOCK_CYCLE;
   uint32_t lu32_CaptureRPM;
-  int16_t ls16_MechSpeedRPM;
+
 
   /* Ta + Te is subtracted to find effective period */
   lu32_CapturePeriod = lu32_CapturePeriod - sens_QEITaTe();
@@ -154,12 +199,6 @@ Pse_Speed_T Pse_EstimateSpeed(void)
 
   /* Get delta position from menc */
   Pse_gs_EncoderPar.s32_CapturedPosition = sens_QEIPosition();
-
-  /* Check for overflow */
-  if(Pse_gs_EncoderPar.s32_CapturedPosition < 0)
-  {
-    Pse_gs_EncoderPar.s32_CapturedPosition = PSE_MENC_STEPS_PER_REV - Pse_gs_EncoderPar.s32_CapturedPosition;
-  }
 
 #if (PAR_USE_MAF_CAPTURE == 1U)
 
@@ -179,14 +218,14 @@ Pse_Speed_T Pse_EstimateSpeed(void)
   ls16_MechSpeedRPM = (int16_t)(((lu32_CaptureRPM * Pse_gs_EncoderPar.s32_SumPositions) / PSE_CAPTURE_ARRAY_SIZE)/PSE_MENC_STEPS_PER_REV);
 
 #else
-
-  /* Calculate mechanical rpm */
-  ls16_MechSpeedRPM = (int16_t) (((lu32_CaptureRPM * Pse_gs_EncoderPar.s32_CapturedPosition)) / PSE_MENC_STEPS_PER_REV );
+  /* Check for overflow */
+  if(Pse_gs_EncoderPar.s32_CapturedPosition >= 0) {
+    /* Calculate mechanical rpm */
+    Pse_gs_Speed.MechSpeedRPM =
+        (int16_t) (((lu32_CaptureRPM * Pse_gs_EncoderPar.s32_CapturedPosition)) / PSE_MENC_STEPS_PER_REV);
+  }
 
 #endif
-
-  /* Low pass filter */
-  Pse_gs_Speed.MechSpeedRPM = Pse_gs_Speed.MechSpeedRPM + (ls16_MechSpeedRPM - Pse_gs_Speed.MechSpeedRPM) / 4;
 
   /* Calculate Electrical rpm */
   Pse_gs_Speed.ElecSpeedRPM = Pse_gs_Speed.MechSpeedRPM * PSE_MECH_TO_ELEC_SPEED;
@@ -199,193 +238,71 @@ Pse_Speed_T Pse_EstimateSpeed(void)
 
   return Pse_gs_Speed;
 }
+
 #if (PAR_USE_HALL_SPEED == 1)
 /*!
  * \details   Speed is estimated by sampling signals from hall sensor.        \n
- *            Whenever hall state changes new speed value is calculated.      \n
- *            Calculated speed passed through a PI filter for better accuracy.\n
- *            This function returns the filtered speed value.
+ *            Whenever function is called, values are converted.      \n
+ *
  * \image    html "Speed Estimation by Hall Sensors.svg"
  */
+
 Pse_Speed_T Pse_EstimateSpeedHall(void)
 {
-  /* Apply PI filter */
-  Pse_gs_Speed.ElecSpeedPERPWM = Pse_gs_Speed.ElecSpeedPERPWM
-    + Math_PIController(&Pse_gs_HallPIControlState, &Pse_gs_HallPIControlPar, (Pse_gs_SpeedHall.ElecSpeedPERPWM - Pse_gs_Speed.ElecSpeedPERPWM));
+  Pse_gs_Speed.ElecSpeedPERPWM = (float)(Pse_gs_Speed.ElecSpeedDIGPERPWM / 65535.0f);
   /* Calculate other speed values */
-  Pse_gs_Speed.ElecSpeedRPM = PSE_PWM_FREQ * Pse_gs_Speed.ElecSpeedPERPWM * PSE_MIN_TO_SEC;
+  Pse_gs_Speed.ElecSpeedRPM = (int16_t)((float)PSE_PWM_FREQ * (float)(Pse_gs_Speed.ElecSpeedPERPWM * PSE_MIN_TO_SEC));
   Pse_gs_Speed.MechSpeedRPM = Pse_gs_Speed.ElecSpeedRPM / PSE_MECH_TO_ELEC_SPEED;
-  Pse_gs_Speed.ElecSpeedDIGPERPWM = (int16_t) (PSE_ELECPERPWM_TO_ELECPERPWM_DIG * Pse_gs_Speed.ElecSpeedPERPWM);
-  if(Pse_HallStateHybrid.u16_count > 666u)
-  {
-    Pse_gs_Speed.MechSpeedRPM = 0;
+
+  if (Pse_gs_Speed.MechSpeedRPM > 10000){
+    Pse_gs_Speed.MechSpeedRPM = 10000;
   }
-  return Pse_gs_Speed;
-}
-#endif
-#if (PAR_USE_HALL_SPEED == 2)
-Pse_Speed_T Pse_EstimateSpeedHall(void)
-{
-  uint32_t *pu32_HallTimes;
-  uint32_t lu32_MedianTime;
-  float fl_ElecSpeedPerS;
-
-  pu32_HallTimes = sens_HallTimes(); /* Get delta-time for each hall sensor */
-
-  lu32_MedianTime = Math_MedianFilter(pu32_HallTimes); /* Apply median filter */
-
-  /* Calculate electrical speed */
-  fl_ElecSpeedPerS = (float)(lu32_MedianTime * PSE_CPUFREQ_TO_SECONDS);
-
-  Pse_gs_Speed.ElecSpeedRPM = (int16_t)(PSE_MIN_TO_SEC/fl_ElecSpeedPerS);
-  Pse_gs_Speed.MechSpeedRPM = Pse_gs_Speed.ElecSpeedRPM / PSE_MECH_TO_ELEC_SPEED;
-  /* Electrical speed  per mpwm period */
-  Pse_gs_Speed.ElecSpeedPERPWM = Pse_gs_Speed.ElecSpeedRPM / PSE_ELECRPM_TO_ELECPERPWM;
-
-  /* Speed DIGITS per mpwm period */
-  Pse_gs_Speed.ElecSpeedDIGPERPWM = (int16_t)(PSE_ELECPERPWM_TO_ELECPERPWM_DIG * Pse_gs_Speed.ElecSpeedPERPWM);
 
   return Pse_gs_Speed;
 }
 #endif
+
+
 /*!
  * \details   Estimation is based on Quadrature Encoder(QE) and Hal sensors                       \n
  *            Hal sensor defines the sector with 60 degrees intervals                             \n
  *            QE tracks the position based on estimated speed. Speed also calculated              \n
  *            based on hall sensors for comparison.                                               \n
  *            If estimated position does not match with Hal sensor measurement,                   \n
- *            Estimated position is moved towards hall sensor measurement with a low pass filter. \n
- *            This way QE position is aligned and position is not changed abruptly.
+ *            Estimated position is moved towards hall sensor measurement with a PI filter.       \n
  * \image   html "Position Estimation.svg"
  */
+
 Pse_Position_T Pse_EstimatePosition(void)
 {
-  uint16_t lu16_LowerTheta;
-  uint16_t lu16_UpperTheta;
-  uint8_t lu8_ExpectedHallState;
+  uint16_t  lu16_HallSensorTheta;
+  int32_t   ls32_PrevTheta32;
+  int32_t   ls32_CurrTheta32;
+  int32_t   ls32_Speed32;
+  int16_t   ls16_Error;
+  int16_t   ls16_H;
+  int16_t   ls16_T;
+  uint8_t   lu8_currentState;
 
-  /* Store previous state */
-  Pse_HallStateHybrid.s_prevState = Pse_HallStateHybrid.s_currState;
 
+  ls32_PrevTheta32 = (int16_t)((int32_t)Pse_gs_Position.u16_Theta - (int32_t)32767);
   /* Measure Hal position */
-  Pse_HallStateHybrid.s_currState = sens_HallState();
+  lu8_currentState = sens_HallState();
 
-  if(Pse_HallStateHybrid.s_prevState == Pse_HallStateHybrid.s_currState)
-  {
-    /* Rotor at the same sector, increase counter */
-    Pse_HallStateHybrid.u16_count++;
-  }
-  else
-  {
-    /* First check if the new state is valid depends on CW/CCW */
-    switch (Pse_HallStateHybrid.s_prevState)
-    {
-    case PSE_SECTOR_1:
-      lu8_ExpectedHallState = PSE_SECTOR_2;
-      break;
-    case PSE_SECTOR_2:
-      lu8_ExpectedHallState = PSE_SECTOR_3;
-      break;
-    case PSE_SECTOR_3:
-      lu8_ExpectedHallState = PSE_SECTOR_4;
-      break;
-    case PSE_SECTOR_4:
-      lu8_ExpectedHallState = PSE_SECTOR_5;
-      break;
-    case PSE_SECTOR_5:
-      lu8_ExpectedHallState = PSE_SECTOR_6;
-      break;
-    case PSE_SECTOR_6:
-      lu8_ExpectedHallState = PSE_SECTOR_1;
-      break;
-    default:
-    case PSE_INVALID:
-      lu8_ExpectedHallState = 0xFF;
-      Pse_HallStateHybrid.s_prevState = Pse_HallStateHybrid.s_currState;
-      break;
-    }
-    if((Pse_HallStateHybrid.s_currState == lu8_ExpectedHallState) && (Pse_HallStateHybrid.u16_count > 0))
-    {
-#if (PAR_USE_HALL_SPEED == 1)
-      if(Pse_HallStateHybrid.u16_count < 666u)
-      {
-        Pse_gs_SpeedHall.ElecSpeedPERPWM = 1.0f / (Pse_HallStateHybrid.u16_count * 6u);
-      }
-      else
-      {
-        Pse_gs_SpeedHall.ElecSpeedPERPWM = 0.0f;
-      }
-      /* Calculate other speed values */
-      Pse_gs_SpeedHall.ElecSpeedRPM = (float) PSE_PWM_FREQ * Pse_gs_SpeedHall.ElecSpeedPERPWM * PSE_MIN_TO_SEC;
-      Pse_gs_SpeedHall.MechSpeedRPM = Pse_gs_SpeedHall.ElecSpeedRPM / PSE_MECH_TO_ELEC_SPEED;
-      Pse_gs_SpeedHall.ElecSpeedDIGPERPWM = (int16_t) (PSE_ELECPERPWM_TO_ELECPERPWM_DIG * Pse_gs_SpeedHall.ElecSpeedPERPWM);
-      Pse_HallStateHybrid.u16_count = 0;
-#endif
-    }
-    else
-    {
-      /* Assume hall sensor input is false */
-      Pse_HallStateHybrid.u16_count++;
-      Pse_HallStateHybrid.s_currState = Pse_HallStateHybrid.s_prevState;
-    }
+  lu16_HallSensorTheta = Pse_gs_HallBoundaries.u16_CalibratedMidPoints[Pse_gs_HallBoundaries.u8_HallStatesToIndex[lu8_currentState]];
+  ls16_T = (int16_t)((int32_t)Pse_gs_Position.u16_Theta - (int32_t)32767);
+  ls16_H = (int16_t)((int32_t)lu16_HallSensorTheta - (int32_t)32767);
+  ls16_Error = ls16_H - ls16_T;
 
-  }
 
-  /* Update estimated position */
-  Pse_gs_Position.u16_Theta += Pse_gs_Speed.ElecSpeedDIGPERPWM;
+  ls16_T  += MATH_Fixedpt_PI_Controller(&Pse_gs_HallPIControlState, &Pse_gs_HallPIControlPar, ls16_Error);
 
-  /* Check if estimated position matches with Hal sensor measurement */
-  switch (Pse_HallStateHybrid.s_currState)
-  {
-  case PSE_SECTOR_1:
-    lu16_LowerTheta = PSE_POSITION_SECTOR_1;
-    lu16_UpperTheta = PSE_POSITION_SECTOR_2;
-    break;
+  Pse_gs_Position.u16_Theta  = (uint16_t)((int32_t)ls16_T + (int32_t)32767);
 
-  case PSE_SECTOR_2:
-    lu16_LowerTheta = PSE_POSITION_SECTOR_2;
-    lu16_UpperTheta = PSE_POSITION_SECTOR_3;
-    break;
-
-  case PSE_SECTOR_3:
-    lu16_LowerTheta = PSE_POSITION_SECTOR_3;
-    lu16_UpperTheta = PSE_POSITION_SECTOR_4;
-    break;
-
-  case PSE_SECTOR_4:
-    lu16_LowerTheta = PSE_POSITION_SECTOR_4;
-    lu16_UpperTheta = PSE_POSITION_SECTOR_5;
-    break;
-
-  case PSE_SECTOR_5:
-    lu16_LowerTheta = PSE_POSITION_SECTOR_5;
-    lu16_UpperTheta = PSE_POSITION_SECTOR_6;
-    break;
-
-  case PSE_SECTOR_6:
-    lu16_LowerTheta = PSE_POSITION_SECTOR_6;
-    lu16_UpperTheta = 0xFFFF;
-    break;
-  default:
-  case PSE_INVALID:
-    lu16_LowerTheta = 0xFFFF;
-    lu16_UpperTheta = 0xFFFF;
-    break;
-
-  }
-
-  if((Pse_gs_Position.u16_Theta >= lu16_LowerTheta) && (Pse_gs_Position.u16_Theta < lu16_UpperTheta))
-  { /* Estimated position matches*/
-    Pse_gs_Position.s_State = PSE_KNOWN;
-
-  }
-  else
-  { /* Use Hal measurement */
-    Pse_gs_Position.s_State = PSE_UNKNOWN;
-    /* Move estimated position towards hall sensor value */
-    Pse_gs_Position.u16_Theta = (uint16_t) (Pse_gs_Position.u16_Theta - ((int16_t) (Pse_gs_Position.u16_Theta - lu16_LowerTheta) / 16));
-
-  }
+  ls32_CurrTheta32 = ls16_T;
+  ls32_Speed32 = (int16_t)((int16_t)ls32_CurrTheta32 - (int16_t)ls32_PrevTheta32);
+  Pse_gs_SpeedHall.ElecSpeedDIGPERPWM = Pse_gs_SpeedHall.ElecSpeedDIGPERPWM + ((int16_t)(ls32_Speed32) - Pse_gs_SpeedHall.ElecSpeedDIGPERPWM)/2;
+  Pse_gs_Speed.ElecSpeedDIGPERPWM = MATH_LowPassFilter(&Pse_SpeedFilterState, Pse_gs_SpeedHall.ElecSpeedDIGPERPWM, 32767);
 
   return Pse_gs_Position;
 }

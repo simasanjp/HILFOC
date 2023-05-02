@@ -7,8 +7,6 @@ from waflib.Configure import conf
 from waflib.TaskGen import feature, after_method, before_method, taskgen_method
 from waflib.Context import STDOUT, BOTH
 from waflib import Logs
-from hilscher_netx import aboot_header_elements, aboot_magiccookie, aboot_signature
-import hilscher_toolchains
 import re
 import os.path
 from netx_image_generator.builder     import NxoBuilder, nxupdate_fn,\
@@ -19,18 +17,16 @@ from netx_image_generator.builder     import NxoBuilder, nxupdate_fn,\
                                              generate_bootheader_headerchecksum,\
                                              make_array32
 
-
-hilscher_tooldir = os.path.abspath(os.path.dirname(__file__))
+hilscher_waf_dir = os.path.abspath(os.path.dirname(__file__))
 
 # waf buildsystem related hooks to initialize this module
 def options(opt):
-    global hilscher_tooldir
-    opt.load('hilscher_libsused', tooldir = os.path.relpath(hilscher_tooldir, opt.root.abspath()))
+    global hilscher_waf_dir
+    opt.load('hilscher_libsused', tooldir = [ hilscher_waf_dir ] )
 
 def configure(conf):
-    global hilscher_tooldir
-    conf.load('hilscher_libsused', tooldir = os.path.relpath(hilscher_tooldir, conf.root.abspath()))
-
+    global hilscher_waf_dir
+    conf.load('hilscher_libsused', tooldir = [ hilscher_waf_dir ] )
 
 def display_findings(bld):
     findings = bld.findings
@@ -90,17 +86,20 @@ def process_removelibrcx(self):
 
 @conf
 def module(bld, target, fileheader_source, platform = None, toolchain = None,**kw):
+
+  kw['target']    = target
   kw['platform']  = platform
   kw['toolchain'] = toolchain
 
-  name             = kw.pop('name', target)
+  bld.handle_toolchain(kw)
+
   description      = kw.pop('description', '')
   use              = kw.pop('use',        [])
   source           = kw.pop('source',     [])
   source_arm       = kw.pop('source_arm', [])
 
-  if not handle_toolchain(bld,kw):
-    return
+  kw.pop('target', None)
+  name = kw.pop('name', target)
 
   tempelf_target = bld.path.find_or_declare(target)
   tempelf_target = str(tempelf_target.change_ext(''))
@@ -124,7 +123,7 @@ def module(bld, target, fileheader_source, platform = None, toolchain = None,**k
           source_arm  = source_arm,
           use         = use,
           linkflags   = Utils.to_list(kw.pop('linkflags', [])) + ['-Wl,-r'],
-          hidden_from_list = True,
+          hidden_from_list = "Internal",
           **kw)
 
   nxo_sources = Utils.to_list(fileheader_source) + Utils.to_list(kw.get('taglist_source', []))
@@ -207,8 +206,6 @@ class NxoBuilderTask(Task.Task):
 ''' ------------------------------------------
    Firmware
    ------------------------------------------ '''
-from hilscher_netx import  program,handle_toolchain
-
 @conf
 def firmware(bld, target, linkerscript, platform, toolchain,**kw):
   """
@@ -241,12 +238,12 @@ def firmware(bld, target, linkerscript, platform, toolchain,**kw):
   \n\n\n
   """
   # mandatory parameters
+  kw['target']           = target
   kw['platform']         = platform
   kw['toolchain']        = toolchain
   kw['linkerscript']     = linkerscript
 
-  if not handle_toolchain(bld,kw):
-    return
+  bld.handle_toolchain(kw)
 
   install_path     = kw.pop('install_path', None)
   BOOTBLOCKERFLAGS = kw.pop('BOOTBLOCKERFLAGS', None)
@@ -261,6 +258,7 @@ def firmware(bld, target, linkerscript, platform, toolchain,**kw):
 
   tgt = bld.path.find_or_declare(target)
 
+  kw.pop('target', None)
   name = kw.pop('name', target)
 
   # generate unique, identifiers for intermediate build product "elf file"
@@ -273,22 +271,6 @@ def firmware(bld, target, linkerscript, platform, toolchain,**kw):
   # The name of the elf file generator is just the name of the firmware file generator
   # prefixed with an underscore
   prog_name = '_' + name
-
-
-  # sanity checks to verify that task generator is not doubly defined
-  try:
-      bld.get_tgen_by_name(name)
-  except bld.errors.WafError:
-      pass
-  else:
-      bld.fatal(u'Double task generator %r. Please use unique "name" parameter for target %r' % (name, target))
-
-  try:
-      bld.get_tgen_by_name(prog_name)
-  except bld.errors.WafError:
-      pass
-  else:
-      bld.fatal(u'Double task generator %r. Please use unique "name" parameter for target %r' % (prog_name, target))
 
   features = Utils.to_list(kw.pop('features', []))
   features_program  = list(set(features) | set(['buildstamp']))
@@ -314,12 +296,12 @@ def firmware(bld, target, linkerscript, platform, toolchain,**kw):
       features_firmware.append('libsused')
 
   # generate the elf file
-  bld.program(target           = prog_target,
-              name             = prog_name,
-              install_path     = [],
-              hidden_from_list = True,
-              features         = features_program,
-              **kw)
+  bld._program_internal(target           = prog_target,
+                        name             = prog_name,
+                        install_path     = [],
+                        hidden_from_list = "Internal",
+                        features         = features_program,
+                        **kw)
 
   # check kind of firmware to build
   if kind is None:
@@ -410,6 +392,16 @@ def generate_hboot_image(bld, target, netx_type, hboot_xml, use, **kw):
         netx_type = netx_type,
         hboot_xml = hboot_xml, use=use, **kw)
 
+allowed_sdram_split_offset_values = (
+    0, # No split
+    0x00400000, # Enable Split for 8 MB SDRAM
+    0x00800000, # Enable Split for 16 MB SDRAM
+    0x01000000, # Enable Split for 32 MB SDRAM
+    0x02000000, # Enable Split for 64 MB SDRAM
+    0x04000000, # Enable Split for 128 MB SDRAM
+    0x08000000, # Enable Split for 256 MB SDRAM
+)
+
 @conf
 def generate_netx90_app_image(bld, target, netx_type, use,
                               segments_intflash = None, segments_extflash = None,
@@ -417,6 +409,8 @@ def generate_netx90_app_image(bld, target, netx_type, use,
                               sdram_split_offset = None, **kw):
     u""" build an nai/nae flash image to contain the application
          firmware """
+
+    global allowed_sdram_split_offset_values
 
     bld.check_python_version_for_hboot()
 
@@ -443,7 +437,7 @@ def generate_netx90_app_image(bld, target, netx_type, use,
         if not isinstance(sdram_split_offset,int):
             bld.fatal(u'Argument sdram_split_offset for target %r must be a number' % (name))
 
-        if sdram_split_offset not in (0, 0x400000):
+        if sdram_split_offset not in allowed_sdram_split_offset_values:
             bld.fatal(u'Argument sdram_split_offset for target %r set to unsupported value 0x%08x' % (name,sdram_split_offset))
 
     if headeraddress_extflash is not None:
@@ -639,7 +633,7 @@ def build_hboot(self):
             bld.fatal('HBoot platforms of all source elfs must be identical')
 
         if not getattr(t, 'posted', None):
-            tgen.post()
+            t.post()
 
         elf_inputs.append(t.link_task.outputs[0])
 
@@ -1070,13 +1064,15 @@ class generate_nai(HilscherTask):
         if common_header[0] != 0x00030000:
             raise ValueError(u'Unexpected header version of common header for NAI when building %s' % self.targets_pretty)
 
+        if common_header[3] != 704:
+            raise ValueError(u'Unexpected value %d in field ulDataStartOffset of common file header for NAE when building %s. (Should be 704)' % (common_header[3], self.targets_pretty))
+
         return default_header, common_header
 
-    def patch_nax_header(self, default_header, common_header, length_nai):
-        default_header[4]  = (length_nai - 64) / 4
-
-        common_header[2]  = length_nai
-        common_header[3]  = 0
+    def patch_nax_header(self, default_header, common_header, length_nax):
+        default_header[4]  = (length_nax - 64) / 4
+        # Set FHv3 Common Header ulDataSize field according file size & ulDataStartOffset
+        common_header[2]   = (length_nax - common_header[3])
 
     def run(self):
         import struct
@@ -1133,6 +1129,9 @@ class generate_nai_nae(generate_nai):
 
         if common_header[0] != 0x00030000:
             raise ValueError(u'Unexpected header version of common header for NAE image when building %s' % self.targets_pretty)
+
+        if common_header[3] != 256:
+            raise ValueError(u'Unexpected value %d in field ulDataStartOffset of common file header for NAE image when building %s. (Should be 256)' % (common_header[3], self.targets_pretty))
 
         return default_header, common_header
 

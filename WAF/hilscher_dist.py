@@ -57,7 +57,6 @@ def distribute_lib(bld, install_path, use , **kw):
     if not getattr(bld,'is_install', False):
         return
 
-
     kw.setdefault('wscript_name',        'wscript')
     kw.setdefault('include_folder_name', 'Includes')
     kw.setdefault('lib_folder_name',     'Lib')
@@ -78,16 +77,16 @@ def distribute_lib(bld, install_path, use , **kw):
 
     # generate distribution folder
     bld(features = ['distribute_lib'],
-        hidden_from_list = True,
+        hidden_from_list = "Internal",
         **kw)
 
     # generate libsused file
     bld(name     = '%s/libsused' % install_path,
         target   = 'libsused.txt',
-        features = 'libsused',
+        features = 'libsused_explicit',
         use      = use_usedlibs,
         include_SDK = True,
-        hidden_from_list = True,
+        hidden_from_list = "Internal",
         install_path = '%s/ReleaseNotes/' % install_path)
 
 @conf
@@ -113,15 +112,15 @@ def distribute_firmware(bld, install_path, use , **kw):
 
     # generate distribution folder
     bld(features = ['distribute_firmware'],
-        hidden_from_list = True,
+        hidden_from_list = "Internal",
         **kw)
 
     # generate libsused file
     bld(name     = '%s/libsused' % install_path,
         target   = 'libsused.txt',
-        features = 'libsused',
+        features = 'libsused_explicit',
         use      = use_usedlibs,
-        hidden_from_list = True,
+        hidden_from_list = "Internal",
         install_path = '%s/ReleaseNotes/' % install_path)
 
 @feature('distribute_lib', 'distribute_firmware')

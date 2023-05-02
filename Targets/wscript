@@ -6,10 +6,17 @@ def build(bld):
     VERSION_REVISION = 0
     VERSION = "%u.%u.%u.%u" % (VERSION_MAJOR, VERSION_MINOR, VERSION_BUILD, VERSION_REVISION)
     
-    toolchain   = "gccarmemb"
+    toolchain = bld.env["UsedToolchain"]
+    if not toolchain:
+        bld.fatal('Environment parameter "UsedToolchain" is not available! Make sure to provide the environment parameter "UsedToolchain" in the root wscript file of your project. e.g.: conf.env["UsedToolchain"] = "gccarmemb"')
+    
+    platform  = bld.env["UsedPlatform"]
+    if not platform:
+        bld.fatal('Environment parameter "UsedPlatform" is not available! Make sure to provide the environment parameter "UsedPlatform" in the root wscript file of your project. e.g.: conf.env["UsedPlatform"]  = "netx90"')
+    
     comp_prefix = bld.get_name_prefix(
         toolchain = toolchain,
-        platform  = "netx90")
+        platform  = platform)
     
     sources = [
          "NXHX90-MC/Sources/handler.c",
@@ -33,8 +40,8 @@ def build(bld):
         ]
         
     uses = [ 
-        "CMSIS",
-        "netx_drv",
+        comp_prefix + "CMSIS",
+        comp_prefix + "netx_drv",
         comp_prefix + "libc_support",
         comp_prefix + "hal",
         comp_prefix + "math",
@@ -48,7 +55,7 @@ def build(bld):
         description  = "Host Motor Control Example using NXHX90-MC as Host",
         displaygroup = "Targets",
         version      = VERSION,
-        platform     = "netx90",
+        platform     = platform,
         toolchain    = toolchain,
         use          = uses,
         source       = sources,
@@ -64,7 +71,7 @@ def build(bld):
         description  = "Host Motor Control Example using NXHX90-MC as Host",
         displaygroup = "Targets",
         version      = VERSION,
-        platform     = "netx90",
+        platform     = platform,
         toolchain    = toolchain,
         use          = uses,
         source       = sources,

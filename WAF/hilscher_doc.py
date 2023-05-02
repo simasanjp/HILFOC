@@ -10,10 +10,19 @@
 ########################################################################################
 
 from waflib.Configure import conf
-from waflib import Utils, Task
+from waflib import Build, Context, Task, Utils
 import re
 import os
 import shlex
+
+# Define a flag property to control if documentation shall be build
+def build_documentation(self):
+    return self.is_install or self.cmd == 'doc'
+Context.Context.build_documentation = property(build_documentation)
+
+class DocumentationContext(Build.BuildContext):
+  '''Build & Generate documentation'''
+  cmd = 'doc'
 
 def configure(conf):
     # change to parent environment object
@@ -89,6 +98,7 @@ class doxygen(Task.Task):
         RTF_STYLESHEET_FILE
         TAGFILES
         WARN_LOGFILE
+        USE_MDFILE_AS_MAINPAGE
     '''.split())
 
     def translate_paths(self, parameter, value):
@@ -206,6 +216,18 @@ def generate_doxygen_documentation(bld, doxyfile, **kw):
 
     output_dir_node = doxyfile_node.parent.find_or_declare(doxygen_params['OUTPUT_DIRECTORY']).get_src()
 
+    # Lets check if another documentation command was issued with same
+    # output directory
+    doxygen_output_dirs = bld._doxygen_output_dirs = getattr(bld,'_doxygen_output_dirs', {})
+
+    try:
+        existing_node = doxygen_output_dirs[output_dir_node]
+
+        bld.fatal(u'doxygen output directory %r already defined in %r' %
+                  (doxygen_params['OUTPUT_DIRECTORY'], existing_node.path_from(bld.srcnode) ))
+    except KeyError:
+        doxygen_output_dirs[output_dir_node] = doxyfile_node
+
     def get_doxygen_boolean(key):
         val = doxygen_params.get(key,'NO').lower()
         return val in ('true', 'yes')
@@ -229,10 +251,11 @@ def generate_doxygen_documentation(bld, doxyfile, **kw):
 
     potential_source_nodes = sum((get_file_list(n) for n in doxygen_input_nodes),[])
 
-    tsk = doxygen(env=bld.env)
-    tsk.set_inputs([doxyfile_node] + potential_source_nodes)
-    tsk.set_outputs([mangled_doxyfile_node, output_dir_node] + doxygen_output_nodes)
-    bld.add_to_group(tsk)
+    if bld.build_documentation:
+        tsk = doxygen(env=bld.env)
+        tsk.set_inputs([doxyfile_node] + potential_source_nodes)
+        tsk.set_outputs([mangled_doxyfile_node, output_dir_node] + doxygen_output_nodes)
+        bld.add_to_group(tsk)
 
     if bld.is_install and ('install_path' in kw):
         bld.install_files(kw['install_path'], doxygen_output_nodes)

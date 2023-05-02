@@ -6,6 +6,7 @@
 #include "adc.h"
 #include "pse.h"
 #include "mathematics.h"
+#include "gatedriver_drv8323.h"
 
 /**
  * \brief Number of measurements for current offset.
@@ -93,15 +94,18 @@ static Math_Vector_DQ_T Foc_gs_ReqVoltDQ;
  */
 static Foc_DCBusRipple_ParameterT Foc_gs_DCBusRipple;
 
-#if (PAR_USE_OPENLOOP == 1)
+GatedriverDrv8323StateT      GatedriverState;
+static uint8_t Foc_gu8_Trials;
+
 /**
  * \brief   Open-loop voltage control in dq frame.
  * \details Requested voltage is set with Foc_SetRequestVoltage \n
  *          Position must be set with Pse_SetPositionManually    \n
  *          Function creates a flux field with given parameters.
  */
-void Foc_VoltageControl();
-#endif
+void Foc_VoltageControl(Pse_Position_T *as_Position);
+
+
 /**
  * \brief   Closed - loop current control in dq frame.
  * \details Current is set with Foc_SetRequestCurrent via output of speed controller.     \n
@@ -109,7 +113,7 @@ void Foc_VoltageControl();
  *          applies PI control then performs inverse Clarke-Park transformations.         \n
  *          Finally calls Foc_Modulation to apply PWM output .
  */
-void Foc_CurrentControl();
+void Foc_CurrentControl(Pse_Position_T *as_Position);
 /**
  * \brief         PI current regulator function.
  * @param[in]     *as_MeasVector Pointer to measured  vector in DQ frame.
@@ -159,38 +163,57 @@ void Foc_Init()
  */
 void Foc_StateMachine()
 {
+  Pse_Position_T ls_EstimatedPosition;
+  /* Gate driver state machine */
+  GatedriverDrv8323_PwmPeriod(&GatedriverState);
+
+  if (GatedriverState.e_MainState == GATEDRIVER_DRV8323_FAILED){
+    /* In case GDU is failed, FOC state is set to FOC_FAILED */
+    Foc_gs_State = FOC_FAILED;
+    Foc_gu8_Trials++;
+  }
 
   switch (Foc_gs_State)
   {
   default:
-  case FOC_IDLE: /* Disable GDU */
-    mpwm_DisableGDU();
+  case FOC_IDLE: /* Disable PWM output */
+    Foc_gs_ReqCurrDQ.f_d = 0.0f;
+    Foc_gs_ReqCurrDQ.f_q = 0.0f;
+    Foc_gs_ReqVoltDQ.f_d = 0.0f;
+    Foc_gs_ReqVoltDQ.f_q = 0.0f;
+    mpwm_DisablePWM();
     break;
   case FOC_CURRENT_OFFSET: /* Enable low side and  measure current offset*/
     Foc_CurrentOffsetStateMachine();
     break;
   case FOC_CURRENT_CONTROL:/* FOC current control */
-    Foc_CurrentControl();
+    ls_EstimatedPosition = Pse_EstimatePosition();
+    Foc_CurrentControl(&ls_EstimatedPosition);
     break;
   case FOC_VOLTAGE_CONTROL:/* FOC voltage control for open-loop */
-#if (PAR_USE_OPENLOOP == 1)
-    Foc_VoltageControl();
-#endif
+    ls_EstimatedPosition = Pse_GetPosition();
+    Foc_VoltageControl(&ls_EstimatedPosition);
     break;
   case FOC_PWM_PATTERN:/* FOC manual pwm pattern */
     break;
   case FOC_FAILED:/* Error state */
-    mpwm_DisableGDU();
-    break;
-  }
-}
+      mpwm_DisablePWM();
+      /* SW stays at the failed state after 10 trials. */
+      if(Foc_gu8_Trials < 10)
+      {
+        GatedriverDrv8323_Prepare(&GatedriverState, GATEDRIVER_OPERATION_ENABLE);
+      }
 
-/*!
- * \details  FOC states can not be changed directly.                     \n
- *           Application requests to change the state via this function. \n
- *           This ensures transitioning safely.
- * @param[in]     as_State Requested state to transit.
- */
+      break;
+    }
+  }
+
+  /*!
+   * \details  FOC states can not be changed directly.                     \n
+   *           Application requests to change the state via this function. \n
+   *           This ensures transitioning safely.
+   * @param[in]     as_State Requested state to transit.
+   */
 void Foc_TransitState(FocStateMachine_MainStateT as_State)
 {
   FocCurrentOffset_StateT ls_CurrState = Foc_gs_CurrentOffsetState;
@@ -220,13 +243,20 @@ void Foc_TransitState(FocStateMachine_MainStateT as_State)
       {
         Foc_gs_State = as_State;
       }
+      else if(ls_State == FOC_FAILED)
+      {
+        //TODO: Things to do before transitioning from error state
+        // Read Gdu error
+        // Reinit GDU
+
+      }
       else
       {
         /*Do nothing */
       }
       break;
     case FOC_PWM_PATTERN:/* FOC manual pwm pattern */
-    case FOC_FAILED:/* Error state */
+    case FOC_FAILED:/* Transit to Error state */
       Foc_gs_State = as_State;
       break;
     }
@@ -242,7 +272,7 @@ void Foc_SetRequestCurrent(Math_Vector_DQ_T as_ReqCurrent)
   Foc_gs_ReqCurrDQ = as_ReqCurrent;
 }
 
-#if (PAR_USE_OPENLOOP == 1)
+
 /*!
  * \details       Use only in open-loop mode.
  * @param[in]     as_ReqVoltage Requested voltage in DQ frame.
@@ -251,24 +281,24 @@ void Foc_SetRequestVoltage(Math_Vector_DQ_T as_ReqVoltage)
 {
   Foc_gs_ReqVoltDQ = as_ReqVoltage;
 }
-#endif
 
 Math_Vector_DQ_T Foc_GetRequestVoltage()
 {
   return Foc_gs_ReqVoltDQ;
 }
 
-void Foc_VoltageControl()
+FocStateMachine_MainStateT Foc_GetFOCState(){
+  return Foc_gs_State;
+}
+
+void Foc_VoltageControl(Pse_Position_T *as_Position)
 {
   Math_Vector_AB_T voltageAB;
   Math_Vector_UVW_T voltageUVW;
   Math_Vector_UVW_T voltageUVW_svm;
-
-  Pse_Position_T ls_EstimatedPosition;
   Math_Vector_SC_T ls_SinCos;
 
-  ls_EstimatedPosition = Pse_GetPosition();
-  ls_SinCos = Math_SinCos(ls_EstimatedPosition.u16_Theta);
+  ls_SinCos = Math_SinCos(as_Position->u16_Theta);
 
   /* Open loop voltage control */
   voltageAB = Math_InversePark(&Foc_gs_ReqVoltDQ, &ls_SinCos);
@@ -278,7 +308,7 @@ void Foc_VoltageControl()
   Foc_Modulation(&voltageUVW_svm);
 }
 
-void Foc_CurrentControl()
+void Foc_CurrentControl(Pse_Position_T *as_Position)
 {
   Math_Vector_DQ_T MeasCurrDQ;
   Math_Vector_AB_T MeasCurrAB;
@@ -287,12 +317,10 @@ void Foc_CurrentControl()
   Math_Vector_AB_T VoltageAB;
   Math_Vector_UVW_T VoltageUVW;
   Math_Vector_UVW_T VoltageUVW_svm;
-
-  Pse_Position_T ls_EstimatedPosition;
   Math_Vector_SC_T ls_SinCos;
 
-  ls_EstimatedPosition = Pse_EstimatePosition();
-  ls_SinCos = Math_SinCos(ls_EstimatedPosition.u16_Theta);
+
+  ls_SinCos = Math_SinCos(as_Position->u16_Theta);
 
   MeasCurrUVW = adc_GetMeasuredCurrents();
   MeasCurrAB = Math_Clarke(&MeasCurrUVW);
@@ -300,6 +328,7 @@ void Foc_CurrentControl()
 
   Foc_gs_ReqVoltDQ = Foc_PICurrentControl(&MeasCurrDQ, &Foc_gs_ReqCurrDQ);
   Foc_gs_ReqVoltDQ = Foc_DCBusRippleElimination(&Foc_gs_ReqVoltDQ);
+
 
   VoltageAB = Math_InversePark(&Foc_gs_ReqVoltDQ, &ls_SinCos);
   VoltageUVW = Math_InverseClarke(&VoltageAB);
@@ -347,7 +376,7 @@ void Foc_Modulation(Math_Vector_UVW_T *aps_Duty)
   mpwm_SetDutyCycleA(lu16_DutyA);
   mpwm_SetDutyCycleB(lu16_DutyB);
   mpwm_SetDutyCycleC(lu16_DutyC);
-  mpwm_EnableGDU();
+  mpwm_EnablePWM();
 }
 
 Math_Vector_DQ_T Foc_DCBusRippleElimination(Math_Vector_DQ_T *as_VoltageVector)
@@ -393,14 +422,16 @@ void Foc_CurrentOffsetStateMachine()
   switch (lp_State)
   {
   default:
-  case CURRENT_OFFSET_INIT: /*  */
-    mpwm_EnableLowSide();
-    mpwm_EnableGDU();
+  case CURRENT_OFFSET_INIT: /* Init gatedriver(write config and check for errors) then enable GDU and set Low side On */
     Foc_gs_CurrentOffsetPar.u8_NumberOfMeasurements = 0u;
     Foc_gs_CurrentOffsetPar.u32_SumCurrOffset_u = 0U;
     Foc_gs_CurrentOffsetPar.u32_SumCurrOffset_v = 0U;
     Foc_gs_CurrentOffsetPar.u32_SumCurrOffset_w = 0U;
+
+    mpwm_EnableLowSide();
+    mpwm_EnablePWM();
     Foc_gs_CurrentOffsetState = CURRENT_OFFSET_MEASURE;
+
     break;
   case CURRENT_OFFSET_MEASURE: /*  */
     if(Foc_gs_CurrentOffsetPar.u8_NumberOfMeasurements <= (FOC_CURRENT_OFFSET_MEASURE_NUMBER ))
@@ -424,7 +455,7 @@ void Foc_CurrentOffsetStateMachine()
     }
     break;
   case CURRENT_OFFSET_CALC: /*  */
-    mpwm_DisableGDU();
+
     if((Foc_gs_CurrentOffsetPar.u32_SumCurrOffset_u > FOC_CURRENT_OFFSET_SUM_MIN )
       && (Foc_gs_CurrentOffsetPar.u32_SumCurrOffset_u < FOC_CURRENT_OFFSET_SUM_MAX )
       && (Foc_gs_CurrentOffsetPar.u32_SumCurrOffset_v > FOC_CURRENT_OFFSET_SUM_MIN )
@@ -447,8 +478,7 @@ void Foc_CurrentOffsetStateMachine()
     break;
   case CURRENT_OFFSET_FAILED: /* If current offset failed wait some time and reinitialize */
     Foc_gs_CurrentOffsetPar.u16_CurrOffsetCounter++;
-    mpwm_EnableLowSide();
-    mpwm_EnableGDU();
+    mpwm_DisablePWM();
     if(Foc_gs_CurrentOffsetPar.u16_CurrOffsetCounter > FOC_CURRENT_OFFSET_WAIT)
     {
       Foc_gs_CurrentOffsetState = CURRENT_OFFSET_INIT;

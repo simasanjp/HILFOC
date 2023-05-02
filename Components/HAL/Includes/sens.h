@@ -42,4 +42,5 @@ int32_t sens_QEIPosition();
 uint32_t sens_QEITaTe();
 
 
+
 #endif /*_SENS_H_ */

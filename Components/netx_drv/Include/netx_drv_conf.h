@@ -1,8 +1,8 @@
 /*!************************************************************************//*!
  * \file    netx_drv_conf.h
  * \brief   DRV configuration file.
- * $Revision: 6592 $
- * $Date: 2019-12-17 14:14:57 +0100 (Di, 17 Dez 2019) $
+ * $Revision: 9333 $
+ * $Date: 2021-09-27 11:58:14 +0200 (Mo, 27 Sep 2021) $
  * \copyright Copyright (c) Hilscher Gesellschaft fuer Systemautomation mbH. All Rights Reserved.
  * \note Exclusion of Liability for this demo software:
  * The following software is intended for and must only be used for reference and in an
@@ -78,7 +78,7 @@ extern "C"
  "is responsible to ensure that the locking mechanism is functional. This"\
  "warning can be ignored by defining RTOS_ERROR_IGNORE."
 #endif
-
+void DRVSysTick_Handler(void);
 #else
 
 /*!
@@ -110,6 +110,11 @@ extern "C"
  * \brief The release function used.
  */
 #define DRV_UNLOCK(__HANDLE__) DRV_MUTEX_UNLOCK(&(__HANDLE__)->tLock)
+
+/*!
+ * \brief Use the CMSIS standard systick handler in case no RTOS is used.
+ */
+#define DRVSysTick_Handler SysTick_Handler
 
 #endif /* RTOS_USED */
 

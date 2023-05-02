@@ -41,7 +41,7 @@
 
 typedef struct APP_DATA_Ttag
 {
-  FOC_APPL_HANDLE_T tFOC_APPLData;
+  uint16_t data;
 }APP_DATA_T;
 
 #endif /* __MAIN_H */
