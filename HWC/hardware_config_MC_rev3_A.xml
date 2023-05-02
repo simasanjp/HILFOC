@@ -1,0 +1,135 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<hwconfig board="default" chip_type="netx90_rev1" peripherals_version="1.4.0.0" tool_version="3.0.19">
+    <peripherals>
+        <peripheral id="adc0_in1" />
+        <peripheral id="adc1_in1" />
+        <peripheral id="adc2_in1" />
+        <peripheral id="adc2_in2" />
+        <peripheral id="adc2_in3" />
+        <peripheral id="adc2_in4" />
+        <peripheral id="adc2_in6" />
+        <peripheral id="adc3_in1" />
+        <peripheral id="adc3_in2" />
+        <peripheral id="adc3_in3" />
+        <peripheral id="adc3_in5" />
+        <peripheral id="general">
+            <config id="default">
+                <parameter id="file_version" value="0" />
+                <parameter id="app_cpu_enable" value="true" />
+                <parameter id="struct_version" value="2" />
+                <parameter id="firewall_sqi_flash" value="com_only" />
+                <parameter id="firewall_pad_ctrl" value="no_access" />
+                <parameter id="firewall_eth_mac" value="app_only" />
+                <parameter id="firewall_madc" value="app_only" />
+                <parameter id="firewall_sdram" value="com_and_app" />
+                <parameter id="firewall_uart" value="app_only" />
+                <parameter id="firewall_debug_slave" value="no_access" />
+                <parameter id="idpm_enable" value="true" />
+                <parameter id="file_text" value="" />
+                <parameter id="firewall_crypt_system" value="com_only" />
+                <parameter id="firewall_extmem" value="app_only" />
+            </config>
+        </peripheral>
+        <peripheral id="menc">
+            <config id="menc0" />
+        </peripheral>
+        <peripheral id="mmio0" />
+        <peripheral id="mmio16" />
+        <peripheral id="mmio17" />
+        <peripheral id="mmio2" />
+        <peripheral id="mmio4" />
+        <peripheral id="mmio6" />
+        <peripheral id="mpwm" />
+        <peripheral id="phy0_phy1">
+            <config id="default">
+                <parameter id="hw_option" value="0x0080" />
+            </config>
+        </peripheral>
+        <peripheral id="pio12" />
+        <peripheral id="pio8" />
+        <peripheral id="uart">
+            <config id="uart" />
+        </peripheral>
+    </peripherals>
+    <io_config>
+        <pin function="adc3_in2" id="COM_IO0" peripheral="adc3_in2" />
+        <pin function="adc3_in3" id="COM_IO1" peripheral="adc3_in3" />
+        <pin function="mmio17" id="HIF_DIRQ" peripheral="mmio17" />
+        <pin function="mmio16" id="HIF_RDN" peripheral="mmio16" />
+        <pin function="pio_app8" id="MII0_RXCLK" peripheral="pio8" />
+        <pin function="menc0_a" id="MII0_RXD3" peripheral="menc" />
+        <pin function="menc0_b" id="MII0_RXDV" peripheral="menc" />
+        <pin function="menc0_n" id="MII0_RXER" peripheral="menc" />
+        <pin function="mpwm_brake" id="MII0_TXCLK" peripheral="mpwm" />
+        <pin function="pio_app12" id="MII0_TXD0" peripheral="pio12" />
+        <pin function="adc2_in4" id="MII0_TXD2" peripheral="adc2_in4" />
+        <pin function="adc3_in5" id="MII0_TXD3" peripheral="adc3_in5" />
+        <pin function="mpwm0" id="MII1_RXCLK" peripheral="mpwm" />
+        <pin function="mpwm_fail" id="MII1_RXDV" peripheral="mpwm" />
+        <pin function="adc2_in2" id="MII1_TXCLK" peripheral="adc2_in2" />
+        <pin function="mpwm1" id="MII1_TXD0" peripheral="mpwm" />
+        <pin function="mpwm2" id="MII1_TXD1" peripheral="mpwm" />
+        <pin function="mpwm3" id="MII1_TXD2" peripheral="mpwm" />
+        <pin function="mpwm4" id="MII1_TXD3" peripheral="mpwm" />
+        <pin function="adc2_in3" id="MII1_TXEN" peripheral="adc2_in3" />
+        <pin function="adc2_in6" id="MII_MDIO" peripheral="adc2_in6" />
+        <pin function="mled0" id="MLED0" peripheral="phy0_phy1" />
+        <pin function="mled1" id="MLED1" peripheral="phy0_phy1" />
+        <pin function="mled2" id="MLED2" peripheral="phy0_phy1" />
+        <pin function="mled3" id="MLED3" peripheral="phy0_phy1" />
+        <pin function="mmio0" id="MMIO0" peripheral="mmio0" />
+        <pin function="adc2_in1" id="MMIO1" peripheral="adc2_in1" />
+        <pin function="mmio2" id="MMIO2" peripheral="mmio2" />
+        <pin function="adc3_in1" id="MMIO3" peripheral="adc3_in1" />
+        <pin function="mmio4" id="MMIO4" peripheral="mmio4" />
+        <pin function="adc0_in1" id="MMIO5" peripheral="adc0_in1" />
+        <pin function="mmio6" id="MMIO6" peripheral="mmio6" />
+        <pin function="adc1_in1" id="MMIO7" peripheral="adc1_in1" />
+        <pin function="phy0_rxn" id="PHY0_RXN" peripheral="phy0_phy1" />
+        <pin function="phy0_rxp" id="PHY0_RXP" peripheral="phy0_phy1" />
+        <pin function="phy0_txn" id="PHY0_TXN" peripheral="phy0_phy1" />
+        <pin function="phy0_txp" id="PHY0_TXP" peripheral="phy0_phy1" />
+        <pin function="phy1_rxn" id="PHY1_RXN" peripheral="phy0_phy1" />
+        <pin function="phy1_rxp" id="PHY1_RXP" peripheral="phy0_phy1" />
+        <pin function="phy1_txn" id="PHY1_TXN" peripheral="phy0_phy1" />
+        <pin function="phy1_txp" id="PHY1_TXP" peripheral="phy0_phy1" />
+        <pin function="mpwm5" id="RST_OUT_N" peripheral="mpwm" />
+        <pin function="uart_rxd" id="UART_RXD" peripheral="uart" />
+        <pin function="uart_txd" id="UART_TXD" peripheral="uart" />
+    </io_config>
+    <mmio_config>
+        <mmio id="mmio0" signal="gpio0" />
+        <mmio id="mmio16" signal="spi1_app_miso" />
+        <mmio id="mmio17" signal="spi1_app_clk" />
+        <mmio id="mmio2" signal="gpio1" />
+        <mmio id="mmio4" signal="gpio2" />
+        <mmio id="mmio6" signal="spi1_app_mosi" />
+    </mmio_config>
+    <pad_config>
+        <pin drive_strength="low" id="HIF_DIRQ" pull_enable="true" />
+        <pin drive_strength="low" id="HIF_RDN" pull_enable="true" />
+        <pin drive_strength="low" id="MII0_RXCLK" pull_enable="true" />
+        <pin id="MII0_RXD3" pull_enable="true" />
+        <pin id="MII0_RXDV" pull_enable="true" />
+        <pin id="MII0_RXER" pull_enable="true" />
+        <pin drive_strength="low" id="MII0_TXCLK" pull_enable="true" />
+        <pin drive_strength="low" id="MII0_TXD0" pull_enable="true" />
+        <pin drive_strength="low" id="MII1_RXCLK" pull_enable="true" />
+        <pin id="MII1_RXDV" pull_enable="true" />
+        <pin drive_strength="low" id="MII1_TXD0" pull_enable="false" />
+        <pin drive_strength="low" id="MII1_TXD1" pull_enable="false" />
+        <pin drive_strength="low" id="MII1_TXD2" pull_enable="false" />
+        <pin drive_strength="low" id="MII1_TXD3" pull_enable="false" />
+        <pin drive_strength="high" id="MLED0" pull_enable="false" />
+        <pin drive_strength="high" id="MLED1" pull_enable="false" />
+        <pin drive_strength="high" id="MLED2" pull_enable="false" />
+        <pin drive_strength="high" id="MLED3" pull_enable="false" />
+        <pin drive_strength="low" id="MMIO0" pull_enable="true" />
+        <pin drive_strength="low" id="MMIO2" pull_enable="true" />
+        <pin drive_strength="low" id="MMIO4" pull_enable="true" />
+        <pin drive_strength="low" id="MMIO6" pull_enable="true" />
+        <pin drive_strength="low" id="RST_OUT_N" pull_enable="true" />
+        <pin id="UART_RXD" pull_enable="true" />
+        <pin drive_strength="low" id="UART_TXD" pull_enable="true" />
+    </pad_config>
+</hwconfig>
