@@ -1,0 +1,50 @@
+def build(bld):
+    
+
+# Component netx_drv ------------------------------------------------------------    
+    netx_studio_sources = [
+        "Source/netx_drv_dio.c",
+        "Source/netx_drv_cortex.c",
+        "Source/netx_drv_spi.c",
+        "Source/netx_drv_dmac.c",
+        "Source/netx_drv_tim.c",
+        "Source/netx_drv_uart.c",
+        "Source/netx_drv_canctrl.c",
+        "Source/netx_drv_i2c.c", 
+        "Source/netx_drv_biss.c", 
+        "Source/netx_drv.c",
+        "Source/netx_drv_eth_xpic.c",
+        "Source/netx_drv_xpic.c",
+        "Source/netx_drv_adc.c",
+        "Source/netx_drv_mled.c",
+    ]
+
+    includes = [
+        "Include/",
+        ]
+
+    bld.stlib( 
+        target          = "netx_drv",
+        name            = "netx_drv",
+        description     = "netx_drv",
+        displaygroup    = "Libraries",
+        platform        = "netx90",
+        toolchain       = "gccarmemb", 
+        use             = [
+                           "CMSIS_sdk",
+                           "netx_drv_configuration_sdk",
+                          ],
+        source          = netx_studio_sources,
+        includes        = includes,
+        export_includes = includes,
+    )
+    
+    bld.sdkcomponent(
+        name            = "netx_drv_sdk",
+        use             = [ 
+                           "CMSIS_sdk",
+                           "netx_drv_configuration_sdk",
+                           ],
+        export_includes = includes,
+    )
+    

@@ -1,0 +1,92 @@
+def build(bld):
+
+    VERSION_MAJOR    = 1
+    VERSION_MINOR    = 0
+    VERSION_BUILD    = 0
+    VERSION_REVISION = 0
+    VERSION = "%u.%u.%u.%u" % (VERSION_MAJOR, VERSION_MINOR, VERSION_BUILD, VERSION_REVISION)
+    
+    toolchain   = "gccarmemb"
+    comp_prefix = bld.get_name_prefix(
+        toolchain = toolchain,
+        platform  = "netx90")
+    
+    sources = [
+         "NXHX90-MC/Sources/handler.c",
+         "NXHX90-MC/Sources/main.c",
+         "NXHX90-MC/Sources/netx90_app_header.c",
+         "NXHX90-MC/Sources/TerminalHandler.c",
+        ]
+
+    includes = [
+        "NXHX90-MC/Include",
+        ]        
+
+    
+    defines = [ 
+        "__NETX90",
+        "_NETX_",
+        "VERSION_MAJOR = %u" % VERSION_MAJOR,
+        "VERSION_MINOR = %u" % VERSION_MINOR,
+        "VERSION_BUILD = %u" % VERSION_BUILD,
+        "VERSION_REVISION = %u" % VERSION_REVISION,
+        ]
+        
+    uses = [ 
+        "CMSIS",
+        "netx_drv",
+        comp_prefix + "libc_support",
+        comp_prefix + "hal",
+        comp_prefix + "math",
+        comp_prefix + "mcl",
+        comp_prefix + "foc_appl",
+        ]
+    
+    bld.program ( 
+        target       = "netx90_sdram",
+        name         = "netx90_sdram",
+        description  = "Host Motor Control Example using NXHX90-MC as Host",
+        displaygroup = "Targets",
+        version      = VERSION,
+        platform     = "netx90",
+        toolchain    = toolchain,
+        use          = uses,
+        source       = sources,
+        includes     = includes,
+        defines      = defines,
+        linkerscript = "NXHX90-MC/Linker/netx90_sdram.ld",
+        features     = ["group_lib"],
+        )
+
+    bld.firmware(
+        target       = "nx90_app.nai",
+        name         = "netx90_app_iflash",
+        description  = "Host Motor Control Example using NXHX90-MC as Host",
+        displaygroup = "Targets",
+        version      = VERSION,
+        platform     = "netx90",
+        toolchain    = toolchain,
+        use          = uses,
+        source       = sources,
+        includes     = includes,
+        defines      = defines,
+        stlib        = 'm c',
+        linkerscript = ["NXHX90-MC/Linker/netx90_app_iflash.ld"],
+        features     = ["group_lib"],
+        netx_type    = 'netx90_rev1',
+    )
+# the following sdk component is used for configuration purposes in several components
+# in order to keep the components generic and commonly usable in all demo applications
+    bld.sdkcomponent(
+        name            = "netx_drv_configuration_sdk",
+        export_includes = includes,
+    )
+    
+    bld.sdkcomponent(
+        name            = "cmsis_configuration_sdk",
+        export_defines  = [
+                           "__STACK_SIZE = 0x00002000",
+                           "__HEAP_SIZE =  0x00008000",
+                           ],
+        )
+

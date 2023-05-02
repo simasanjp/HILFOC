@@ -1,0 +1,40 @@
+def build(bld):
+    
+    bld.toolchain   = "gccarmemb"
+    bld.platform  = "netx90"
+    comp_prefix = bld.get_name_prefix(
+        toolchain = bld.toolchain,
+        platform  = bld.platform)
+    
+# Component libc_support ---------------------------------------------------------
+    netx_studio_sources = [
+        "Source/libc_file_support.c", 
+        "Source/libc_mem_support.c", 
+        "Source/libc_support.c", 
+        ]
+
+    includes = [
+        "Include",
+        ]
+
+    bld.stlib( 
+        target          = "libc_support",
+        name            = comp_prefix + "libc_support",
+        description     = "libc_support",
+        displaygroup    = "Libraries",
+        platform        = bld.platform,
+        toolchain       = bld.toolchain, 
+        use             = [
+                           "CMSIS_sdk",
+                           "netx_drv_sdk",
+                          ],
+        source          = netx_studio_sources,
+        includes        = includes,
+        export_includes = includes,
+        )
+    
+    bld.sdkcomponent(
+        name            = "libc_support_sdk",
+        export_includes = includes,
+        )
+    

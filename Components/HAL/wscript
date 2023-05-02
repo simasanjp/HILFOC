@@ -1,0 +1,53 @@
+def build(bld):
+    
+    toolchain   = "gccarmemb"
+    comp_prefix = bld.get_name_prefix(
+        toolchain = toolchain,
+        platform  = "netx90")
+    
+    netx_studio_sources = [
+        "Sources/adc.c",
+        "Sources/mpwm.c",
+        "Sources/sens.c",
+    ]
+    
+    includes = [
+        "Includes",
+    ]
+    
+    exported_includes = [
+        "Includes",
+    ]
+    
+    defines = [
+        "__NETX90",
+        "_NETX_",
+    ]
+    
+    exported_defines = [
+    ]
+    
+    uses = [
+        "netx_drv_sdk",
+        "CMSIS_sdk",
+        "mcl_sdk",
+        "math_sdk",
+    ]
+
+    bld.stlib(
+        target           = "hal",
+        name             = comp_prefix + "hal",
+        platform         = "netx90",
+        toolchain        = "gccarmemb",
+        source           = netx_studio_sources,
+        includes         = includes,
+        defines          = defines,
+        use              = uses,
+        export_includes  = exported_includes,
+        export_defines   = exported_defines,
+    )
+    
+    bld.sdkcomponent(
+        name            = "hal_sdk",
+        export_includes = includes,
+        )
